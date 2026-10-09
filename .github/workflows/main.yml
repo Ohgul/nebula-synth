@@ -1,0 +1,58 @@
+name: Compilar Nebula para Mac
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  mac:
+    runs-on: macos-14
+    timeout-minutes: 60
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 4
+
+    steps:
+      - name: Descargar el codigo
+        uses: actions/checkout@v4
+
+      - name: Leer version
+        id: ver
+        run: |
+          V=$(grep -Eo 'project\(NebulaSynth VERSION [0-9.]+' CMakeLists.txt | awk '{print $3}')
+          echo "version=${V}" >> "$GITHUB_OUTPUT"
+          echo "Version: ${V}"
+
+      - name: Configurar (descarga JUCE)
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Compilar VST3, AU y app (Apple Silicon + Intel)
+        run: cmake --build build --config Release --target NebulaSynth_VST3 NebulaSynth_AU NebulaSynth_Standalone
+
+      - name: Firmar localmente (ad-hoc)
+        run: |
+          A=build/NebulaSynth_artefacts/Release
+          codesign --force --deep --sign - "$A/VST3/Nebula.vst3"
+          codesign --force --deep --sign - "$A/AU/Nebula.component"
+          codesign --force --deep --sign - "$A/Standalone/Nebula.app"
+          lipo -info "$A/VST3/Nebula.vst3/Contents/MacOS/Nebula"
+
+      - name: Validar el Audio Unit (auval)
+        continue-on-error: true
+        run: |
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          cp -R build/NebulaSynth_artefacts/Release/AU/Nebula.component ~/Library/Audio/Plug-Ins/Components/
+          killall -9 AudioComponentRegistrar || true
+          sleep 2
+          auval -v aumu Nbl1 Rmcd
+
+      - name: Crear instalador .pkg
+        run: |
+          chmod +x packaging/make_installer.sh
+          packaging/make_installer.sh "${{ steps.ver.outputs.version }}"
+
+      - name: Subir instalador
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nebula-Instalador-${{ steps.ver.outputs.version }}
+          path: dist/*.pkg
+          retention-days: 30
