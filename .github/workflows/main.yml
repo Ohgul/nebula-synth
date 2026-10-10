@@ -2,6 +2,7 @@ name: Compilar Nebula para Mac
 
 on:
   push:
+  pull_request:
   workflow_dispatch:
 
 jobs:
@@ -23,10 +24,16 @@ jobs:
           echo "Version: ${V}"
 
       - name: Configurar (descarga JUCE)
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DNEBULA_BUILD_TESTS=ON
 
       - name: Compilar VST3, AU y app (Apple Silicon + Intel)
         run: cmake --build build --config Release --target NebulaSynth_VST3 NebulaSynth_AU NebulaSynth_Standalone
+
+      - name: Compilar prueba de interfaz
+        run: cmake --build build --config Release --target NebulaUiTest
+
+      - name: Ejecutar prueba de interfaz
+        run: ./build/NebulaUiTest_artefacts/Release/NebulaUiTest
 
       - name: Firmar localmente (ad-hoc)
         run: |
