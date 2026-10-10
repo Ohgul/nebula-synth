@@ -11,6 +11,7 @@ struct SampleData
     bool hasPitch = false;
     juce::String name;
     juce::File file;
+    juce::MemoryBlock embedded;      // copia comprimida (FLAC) para guardarla dentro del proyecto
 
     int length() const { return audio.getNumSamples(); }
     const float* data() const { return audio.getReadPointer (0); }
@@ -118,6 +119,8 @@ namespace SampleTools
         }
     }
 
+    inline juce::MemoryBlock encodeFlac (const SampleData& s);
+
     inline std::shared_ptr<const SampleData> fromBuffer (const juce::AudioBuffer<float>& src, double sr,
                                                          const juce::String& name, const juce::File& file = {})
     {
@@ -136,6 +139,38 @@ namespace SampleTools
         s->name = name;
         s->file = file;
         analysePitch (*s);
+        s->embedded = encodeFlac (*s);
+        return s;
+    }
+
+    // Comprime el sample a FLAC (para guardarlo dentro del proyecto). Hasta 60 s.
+    inline juce::MemoryBlock encodeFlac (const SampleData& s)
+    {
+        juce::MemoryBlock mb;
+        if (s.length() > (int) (s.sampleRate * 60.0)) return mb;
+        juce::FlacAudioFormat flac;
+        auto* stream = new juce::MemoryOutputStream (mb, false);
+        std::unique_ptr<juce::AudioFormatWriter> w (flac.createWriterFor (stream, s.sampleRate, 1, 24, {}, 0));
+        if (w == nullptr) { delete stream; return {}; }
+        w->writeFromAudioSampleBuffer (s.audio, 0, s.length());
+        w.reset();
+        return mb;
+    }
+
+    inline std::shared_ptr<const SampleData> decodeFlac (const juce::MemoryBlock& mb, const juce::String& name, const juce::File& file)
+    {
+        juce::FlacAudioFormat flac;
+        std::unique_ptr<juce::AudioFormatReader> r (flac.createReaderFor (new juce::MemoryInputStream (mb, true), true));
+        if (r == nullptr || r->lengthInSamples < 16) return nullptr;
+        juce::AudioBuffer<float> buf (1, (int) r->lengthInSamples);
+        r->read (&buf, 0, buf.getNumSamples(), 0, true, false);
+        auto s = std::make_shared<SampleData>();
+        s->audio = std::move (buf);
+        s->sampleRate = r->sampleRate;
+        s->name = name;
+        s->file = file;
+        s->embedded = mb;
+        analysePitch (*s);
         return s;
     }
 
@@ -150,7 +185,7 @@ namespace SampleTools
             return nullptr;
         }
 
-        const auto maxLen = (juce::int64) (reader->sampleRate * 20.0); // hasta 20 s
+        const auto maxLen = (juce::int64) (reader->sampleRate * 120.0); // hasta 2 minutos
         const int n = (int) juce::jmin (reader->lengthInSamples, maxLen);
         if (n < (int) (reader->sampleRate * 0.02))
         {

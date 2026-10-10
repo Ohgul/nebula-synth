@@ -4,169 +4,49 @@
 using namespace NebulaColours;
 
 //==============================================================================
-NebulaLookAndFeel::NebulaLookAndFeel()
-{
-    setColour (juce::Slider::textBoxTextColourId, text);
-    setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
-    setColour (juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
-    setColour (juce::Label::textColourId, textDim);
-    setColour (juce::ComboBox::backgroundColourId, track);
-    setColour (juce::ComboBox::textColourId, text);
-    setColour (juce::ComboBox::outlineColourId, panelEdge);
-    setColour (juce::ComboBox::arrowColourId, accent2);
-    setColour (juce::PopupMenu::backgroundColourId, panel);
-    setColour (juce::PopupMenu::textColourId, text);
-    setColour (juce::PopupMenu::highlightedBackgroundColourId, accent.withAlpha (0.6f));
-    setColour (juce::TextButton::buttonColourId, track);
-    setColour (juce::TextButton::textColourOffId, text);
-    setColour (juce::TextEditor::backgroundColourId, track);
-    setColour (juce::TextEditor::textColourId, text);
-    setColour (juce::TextEditor::highlightColourId, accent.withAlpha (0.5f));
-    setColour (juce::CaretComponent::caretColourId, accent2);
-}
-
-void NebulaLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w, int h, float pos,
-                                          float startAngle, float endAngle, juce::Slider& slider)
-{
-    const auto bounds = juce::Rectangle<int> (x, y, w, h).toFloat().reduced (4.0f);
-    const float radius = juce::jmin (bounds.getWidth(), bounds.getHeight()) * 0.5f;
-    const auto centre = bounds.getCentre();
-    const float lineW = juce::jmax (3.0f, radius * 0.13f);
-    const float arcR = radius - lineW * 0.5f;
-    const float angle = startAngle + pos * (endAngle - startAngle);
-
-    // Pista
-    juce::Path track;
-    track.addCentredArc (centre.x, centre.y, arcR, arcR, 0.0f, startAngle, endAngle, true);
-    g.setColour (NebulaColours::track);
-    g.strokePath (track, juce::PathStrokeType (lineW, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-
-    // Valor (bipolar si el rango cruza el cero)
-    const bool bipolar = slider.getMinimum() < 0.0 && slider.getMaximum() > 0.0;
-    const float fromAngle = bipolar ? startAngle + (float) slider.valueToProportionOfLength (0.0) * (endAngle - startAngle)
-                                    : startAngle;
-    juce::Path value;
-    value.addCentredArc (centre.x, centre.y, arcR, arcR, 0.0f, juce::jmin (fromAngle, angle), juce::jmax (fromAngle, angle), true);
-    g.setGradientFill (juce::ColourGradient (accent, centre.x - radius, centre.y + radius,
-                                             accent2, centre.x + radius, centre.y - radius, false));
-    g.strokePath (value, juce::PathStrokeType (lineW, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-
-    // Cuerpo
-    const float bodyR = arcR - lineW * 1.3f;
-    g.setColour (slider.isMouseOverOrDragging() ? panelEdge.brighter (0.15f) : panelEdge);
-    g.fillEllipse (centre.x - bodyR, centre.y - bodyR, bodyR * 2.0f, bodyR * 2.0f);
-
-    // Indicador
-    const juce::Point<float> tip (centre.x + (bodyR - 3.0f) * std::sin (angle), centre.y - (bodyR - 3.0f) * std::cos (angle));
-    const juce::Point<float> base (centre.x + bodyR * 0.35f * std::sin (angle), centre.y - bodyR * 0.35f * std::cos (angle));
-    g.setColour (text);
-    g.drawLine ({ base, tip }, 2.2f);
-}
-
-void NebulaLookAndFeel::drawComboBox (juce::Graphics& g, int w, int h, bool, int, int, int, int, juce::ComboBox& box)
-{
-    const auto r = juce::Rectangle<int> (0, 0, w, h).toFloat().reduced (0.5f);
-    g.setColour (box.findColour (juce::ComboBox::backgroundColourId));
-    g.fillRoundedRectangle (r, 5.0f);
-    g.setColour (box.isMouseOver() ? accent : panelEdge);
-    g.drawRoundedRectangle (r, 5.0f, 1.0f);
-
-    juce::Path arrow;
-    const float ax = (float) w - 14.0f, ay = (float) h * 0.5f;
-    arrow.addTriangle (ax - 4.0f, ay - 2.0f, ax + 4.0f, ay - 2.0f, ax, ay + 3.0f);
-    g.setColour (accent2);
-    g.fillPath (arrow);
-}
-
-//==============================================================================
-KnobCell::KnobCell (juce::AudioProcessorValueTreeState& s, const juce::String& id, const juce::String& name)
-{
-    label.setText (name, juce::dontSendNotification);
-    label.setJustificationType (juce::Justification::centred);
-    addAndMakeVisible (label);
-
-    slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-    slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 76, 18);
-    slider.setColour (juce::Slider::textBoxTextColourId, text);
-    slider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
-    addAndMakeVisible (slider);
-
-    attachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (s, id, slider);
-
-    // Doble clic = valor por defecto
-    if (auto* p = s.getParameter (id))
-        slider.setDoubleClickReturnValue (true, p->convertFrom0to1 (p->getDefaultValue()));
-}
-
-void KnobCell::resized()
-{
-    auto r = getLocalBounds();
-    label.setBounds (r.removeFromTop (18));
-    slider.setBounds (r);
-}
-
-ChoiceCell::ChoiceCell (juce::AudioProcessorValueTreeState& s, const juce::String& id, const juce::String& name)
-{
-    label.setText (name, juce::dontSendNotification);
-    label.setJustificationType (juce::Justification::centred);
-    addAndMakeVisible (label);
-
-    if (auto* p = dynamic_cast<juce::AudioParameterChoice*> (s.getParameter (id)))
-        box.addItemList (p->choices, 1);
-    box.setJustificationType (juce::Justification::centred);
-    addAndMakeVisible (box);
-
-    attachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (s, id, box);
-}
-
-void ChoiceCell::resized()
-{
-    auto r = getLocalBounds();
-    label.setBounds (r.removeFromTop (18));
-    box.setBounds (r.withSizeKeepingCentre (juce::jmin (r.getWidth() - 4, 100), 26).translated (0, -8));
-}
-
-//==============================================================================
-NebulaAudioProcessorEditor::NebulaAudioProcessorEditor (NebulaAudioProcessor& p)
-    : AudioProcessorEditor (&p), processor (p),
+NebulaContent::NebulaContent (NebulaAudioProcessor& p)
+    : proc (p), garden (p), edit (p), mod (p), sampleEditor (p), drawPanel (p),
       keyboard (p.keyboardState, juce::MidiKeyboardComponent::horizontalKeyboard)
 {
-    setLookAndFeel (&lnf);
-
-    using namespace ParamID;
-    oscSection    = { "OSCILADORES", { choice (engine, "Motor"), choice (osc1Wave, "Onda 1"), knob (osc1Octave, "Octava 1"),
-                                       choice (osc2Wave, "Onda 2"), knob (osc2Semi, "Semitonos 2"),
-                                       knob (osc2Fine, "Fino 2"), knob (oscMix, "Mezcla"), knob (subLevel, "Sub"),
-                                       knob (fmAmount, "FM"), knob (noise, "Ruido") } };
-    sampleSection = { "SAMPLE", { choice (engine, "Motor"), knob (smpStart, "Inicio"), knob (smpTune, "Afinacion"),
-                                  choice (smpReverse, "Reversa"), choice (smpLoop, "Loop"), knob (smpTexture, "Textura"),
-                                  knob (smpGrain, "Grano"), knob (subLevel, "Sub"), knob (noise, "Ruido") } };
-    filterSection = { "FILTRO", { choice (filterType, "Tipo"), knob (cutoff, "Corte"), knob (resonance, "Resonancia"),
-                                  knob (filterEnv, "Env Cant."), knob (drive, "Drive") } };
-    ampSection    = { "ENVOLVENTE AMP", { knob (ampA, "Ataque"), knob (ampD, "Decaim."),
-                                          knob (ampS, "Sostenido"), knob (ampR, "Liberacion") } };
-    fltEnvSection = { "ENVOLVENTE FILTRO", { knob (fltA, "Ataque"), knob (fltD, "Decaim."),
-                                             knob (fltS, "Sostenido"), knob (fltR, "Liberacion") } };
-    lfoSection    = { "LFO", { knob (lfoRate, "Velocidad"), knob (lfoFilter, "A Filtro"), knob (lfoPitch, "A Tono") } };
-    masterSection = { "SALIDA", { knob (master, "Volumen") } };
-
-    // Presets
-    const auto& presets = factoryPresets();
-    for (int i = 0; i < (int) presets.size(); ++i)
-        presetBox.addItem (presets[(size_t) i].name, i + 1);
-    presetBox.setSelectedId (processor.getPresetIndex() + 1, juce::dontSendNotification);
-    presetBox.setJustificationType (juce::Justification::centred);
-    presetBox.onChange = [this]
+    const char* names[] { "Jardin", "Editar", "Modulacion" };
+    const juce::Path icons[] { Icons::garden(), Icons::sliders(), Icons::modulation() };
+    const char* tips[] { "Jardin: cultiva variaciones del sonido y arrastra audios",
+                         "Editar: osciladores, filtros, volumen y voces",
+                         "Modulacion: envolventes, LFOs y matriz" };
+    for (int i = 0; i < 3; ++i)
     {
-        if (const int id = presetBox.getSelectedId(); id > 0)
-            processor.loadPreset (id - 1);
-    };
-    addAndMakeVisible (presetBox);
+        tabs[(size_t) i] = std::make_unique<IconButton> (names[i], icons[i], tips[i]);
+        tabs[(size_t) i]->horizontal = true;
+        tabs[(size_t) i]->onClick = [this, i] { showTab (i); };
+        addAndMakeVisible (*tabs[(size_t) i]);
+    }
 
-    prevButton.onClick = [this] { stepPreset (-1); };
-    nextButton.onClick = [this] { stepPreset (+1); };
-    addAndMakeVisible (prevButton);
-    addAndMakeVisible (nextButton);
+    rebuildPresetMenu();
+    presetBox.onChange = [this] { presetChosen(); };
+    presetBox.setTooltip ("Presets de fabrica y tuyos");
+    addAndMakeVisible (presetBox);
+    prevButton.onClick = [this] { const int n = presetBox.getNumItems(); if (n > 0) presetBox.setSelectedItemIndex ((juce::jmax (0, presetBox.getSelectedItemIndex()) - 1 + n) % n); };
+    nextButton.onClick = [this] { const int n = presetBox.getNumItems(); if (n > 0) presetBox.setSelectedItemIndex ((juce::jmax (0, presetBox.getSelectedItemIndex()) + 1) % n); };
+    saveButton.onClick = [this] { savePreset(); };
+    folderButton.onClick = [] { auto f = NebulaAudioProcessor::userPresetFolder(); f.createDirectory(); f.revealToUser(); };
+    for (auto* b : { &prevButton, &nextButton, &saveButton, &folderButton }) addAndMakeVisible (b);
+
+    zoomBox.addItemList ({ "80 %", "90 %", "100 %", "115 %", "130 %" }, 1);
+    zoomBox.setSelectedId (3, juce::dontSendNotification);
+    zoomBox.setTooltip ("Tamano de la ventana");
+    zoomBox.onChange = [this] { static const float z[] { 0.8f, 0.9f, 1.0f, 1.15f, 1.3f }; if (onZoom) onZoom (z[zoomBox.getSelectedId() - 1]); };
+    addAndMakeVisible (zoomBox);
+
+    addChildComponent (garden);
+    addChildComponent (edit);
+    addChildComponent (mod);
+    addChildComponent (sampleEditor);
+    addChildComponent (drawPanel);
+
+    garden.onOpenSampleEditor = [this] { sampleEditor.open(); };
+    garden.framesForWave = [this] { return sampleEditor.framesChoice(); };
+    edit.onOpenSampleEditor = [this] { sampleEditor.open(); };
+    edit.onOpenDraw = [this] { drawPanel.setVisible (true); drawPanel.toFront (true); };
 
     keyboard.setAvailableRange (24, 108);
     keyboard.setColour (juce::MidiKeyboardComponent::keyDownOverlayColourId, accent.withAlpha (0.7f));
@@ -179,168 +59,151 @@ NebulaAudioProcessorEditor::NebulaAudioProcessorEditor (NebulaAudioProcessor& p)
     keyboard.setWantsKeyboardFocus (false);
     addAndMakeVisible (keyboard);
 
-    gardenView = std::make_unique<GardenView> (processor);
-    addChildComponent (*gardenView);
+    setSize (designW, designH);
+    showTab (0);
+    startTimerHz (2);
+}
 
-    for (auto* t : { &gardenTab, &editTab })
+void NebulaContent::setZoomChoice (float z)
+{
+    static const float zs[] { 0.8f, 0.9f, 1.0f, 1.15f, 1.3f };
+    for (int i = 0; i < 5; ++i)
+        if (std::abs (zs[i] - z) < 0.01f) zoomBox.setSelectedId (i + 1, juce::dontSendNotification);
+}
+
+void NebulaContent::showTab (int tab)
+{
+    currentTab = tab;
+    garden.setVisible (tab == 0);
+    edit.setVisible (tab == 1);
+    mod.setVisible (tab == 2);
+    for (int i = 0; i < 3; ++i) tabs[(size_t) i]->setToggleState (i == tab, juce::dontSendNotification);
+}
+
+void NebulaContent::rebuildPresetMenu()
+{
+    presetBox.clear (juce::dontSendNotification);
+    const auto& factory = factoryPresets();
+    for (int i = 0; i < (int) factory.size(); ++i)
+        presetBox.addItem (factory[(size_t) i].name, i + 1);
+    userPresets = proc.userPresetNames();
+    if (! userPresets.isEmpty())
     {
-        t->setClickingTogglesState (true);
-        t->setRadioGroupId (1001);
-        t->setColour (juce::TextButton::buttonOnColourId, accent.withAlpha (0.85f));
-        t->setColour (juce::TextButton::textColourOnId, juce::Colours::white);
-        addAndMakeVisible (*t);
+        presetBox.addSeparator();
+        presetBox.addSectionHeading ("Tus presets");
+        for (int i = 0; i < userPresets.size(); ++i)
+            presetBox.addItem (userPresets[i], 1000 + i);
     }
-    gardenTab.onClick = [this] { if (gardenTab.getToggleState()) showTab (true); };
-    editTab.onClick   = [this] { if (editTab.getToggleState()) showTab (false); };
-
-    setSize (1100, 600);
-    gardenTab.setToggleState (true, juce::dontSendNotification);
-    lastEngineSampler = samplerEngine();
-    showTab (true);
-    startTimerHz (10);
+    const int idx = proc.getPresetIndex();
+    if (idx >= 0) presetBox.setSelectedId (idx + 1, juce::dontSendNotification);
+    else presetBox.setText ("(sonido propio)", juce::dontSendNotification);
 }
 
-void NebulaAudioProcessorEditor::timerCallback()
+void NebulaContent::presetChosen()
 {
-    // Al cambiar de motor (Sinte/Sample) se cambia la sección de arriba en Editar
-    if (samplerEngine() != lastEngineSampler)
+    const int id = presetBox.getSelectedId();
+    if (id <= 0) return;
+    if (id >= 1000) proc.loadUserPreset (userPresets[id - 1000]);
+    else proc.loadPreset (id - 1);
+}
+
+void NebulaContent::savePreset()
+{
+    saveDialog = std::make_unique<juce::AlertWindow> ("Guardar preset", "Ponle nombre a tu sonido:", juce::MessageBoxIconType::NoIcon, this);
+    saveDialog->addTextEditor ("name", "Mi sonido");
+    saveDialog->addButton ("Guardar", 1, juce::KeyPress (juce::KeyPress::returnKey));
+    saveDialog->addButton ("Cancelar", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    saveDialog->enterModalState (true, juce::ModalCallbackFunction::create ([this] (int result)
     {
-        lastEngineSampler = samplerEngine();
-        resized();
-        updateVisibility();
-        repaint();
-    }
+        if (result == 1 && saveDialog != nullptr)
+        {
+            const auto name = saveDialog->getTextEditorContents ("name");
+            if (proc.saveUserPreset (name))
+            {
+                rebuildPresetMenu();
+                const int i = userPresets.indexOf (juce::File::createLegalFileName (name.trim()));
+                if (i >= 0) presetBox.setSelectedId (1000 + i, juce::dontSendNotification);
+            }
+        }
+        saveDialog.reset();
+    }), false);
 }
 
-void NebulaAudioProcessorEditor::updateVisibility()
+void NebulaContent::timerCallback()
 {
-    for (auto& cell : cells)
-        cell->setVisible (false);
-    if (showingGarden)
-        return;
-    for (auto* s : { &topSection(), &filterSection, &ampSection, &fltEnvSection, &lfoSection, &masterSection })
-        for (auto* c : s->cells)
-            c->setVisible (true);
+    // Si cambiaron los presets de usuario en disco (por ejemplo desde otra instancia)
+    if (proc.userPresetNames() != userPresets) rebuildPresetMenu();
+
+    // Si el preset cambió desde fuera (proyecto abierto, otra ventana), mostrarlo
+    const int idx = proc.getPresetIndex();
+    if (idx >= 0 && presetBox.getSelectedId() != idx + 1 && ! presetBox.isPopupActive())
+        presetBox.setSelectedId (idx + 1, juce::dontSendNotification);
 }
 
-NebulaAudioProcessorEditor::~NebulaAudioProcessorEditor()
-{
-    setLookAndFeel (nullptr);
-}
-
-juce::Component* NebulaAudioProcessorEditor::knob (const char* id, const char* name)
-{
-    auto& c = cells.emplace_back (std::make_unique<KnobCell> (processor.state, id, name));
-    addAndMakeVisible (*c);
-    return c.get();
-}
-
-juce::Component* NebulaAudioProcessorEditor::choice (const char* id, const char* name)
-{
-    auto& c = cells.emplace_back (std::make_unique<ChoiceCell> (processor.state, id, name));
-    addAndMakeVisible (*c);
-    return c.get();
-}
-
-void NebulaAudioProcessorEditor::showTab (bool garden)
-{
-    showingGarden = garden;
-    gardenView->setVisible (garden);
-    updateVisibility();
-    repaint();
-}
-
-void NebulaAudioProcessorEditor::stepPreset (int delta)
-{
-    const int n = presetBox.getNumItems();
-    const int current = juce::jmax (0, presetBox.getSelectedItemIndex());
-    presetBox.setSelectedItemIndex ((current + delta + n) % n, juce::sendNotification);
-}
-
-void NebulaAudioProcessorEditor::paint (juce::Graphics& g)
+void NebulaContent::paint (juce::Graphics& g)
 {
     g.fillAll (background);
-
-    // Cabecera
-    g.setGradientFill (juce::ColourGradient (accent, 20.0f, 0.0f, accent2, 200.0f, 0.0f, false));
+    g.setGradientFill (juce::ColourGradient (accent, 18.0f, 0.0f, accent2, 170.0f, 0.0f, false));
     g.setFont (juce::FontOptions (26.0f, juce::Font::bold));
-    g.drawText ("NEBULA", 20, 12, 200, 32, juce::Justification::centredLeft);
+    g.drawText ("NEBULA", 18, 10, 150, 34, juce::Justification::centredLeft);
     g.setColour (textDim);
-    g.setFont (juce::FontOptions (12.0f));
-    g.drawText ("PRESET", getWidth() - 376, 16, 60, 24, juce::Justification::centredRight);
-
-    if (showingGarden)
-        return;
-
-    for (auto* s : { &topSection(), &filterSection, &ampSection, &fltEnvSection, &lfoSection, &masterSection })
-    {
-        const auto r = s->area.toFloat();
-        g.setColour (panel);
-        g.fillRoundedRectangle (r, 8.0f);
-        g.setColour (panelEdge);
-        g.drawRoundedRectangle (r.reduced (0.5f), 8.0f, 1.0f);
-
-        g.setColour (accent2);
-        g.fillRoundedRectangle (r.getX() + 12.0f, r.getY() + 13.0f, 3.0f, 12.0f, 1.5f);
-        g.setColour (text);
-        g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
-        g.drawText (s->title, (int) r.getX() + 21, (int) r.getY() + 8, (int) r.getWidth() - 30, 22, juce::Justification::centredLeft);
-    }
+    g.setFont (juce::FontOptions (10.0f));
+    g.drawText ("v2", 140, 12, 30, 14, juce::Justification::centredLeft);
 }
 
-void NebulaAudioProcessorEditor::layoutRow (std::vector<Section*> row, juce::Rectangle<int> area)
+void NebulaContent::resized()
 {
-    constexpr int gap = 12;
-    // Los selectores (combo) ocupan un poco más que los knobs
-    auto weight = [] (juce::Component* c) { return dynamic_cast<ChoiceCell*> (c) != nullptr ? 1.45f : 1.0f; };
-    float totalUnits = 0.0f;
-    for (auto* s : row) for (auto* c : s->cells) totalUnits += weight (c);
+    auto r = getLocalBounds().reduced (14, 0);
+    auto header = r.removeFromTop (54);
+    header.removeFromLeft (160);
+    auto tabArea = header.removeFromLeft (390).withSizeKeepingCentre (390, 34);
+    for (auto& t : tabs) t->setBounds (tabArea.removeFromLeft (128).reduced (2, 0));
 
-    const float unit = (float) (area.getWidth() - gap * ((int) row.size() - 1) - 16 * (int) row.size()) / totalUnits;
-    float x = (float) area.getX();
+    auto right = header.withSizeKeepingCentre (header.getWidth(), 30);
+    zoomBox.setBounds (right.removeFromRight (78));
+    right.removeFromRight (14);
+    folderButton.setBounds (right.removeFromRight (30));
+    right.removeFromRight (4);
+    saveButton.setBounds (right.removeFromRight (30));
+    right.removeFromRight (8);
+    nextButton.setBounds (right.removeFromRight (30));
+    presetBox.setBounds (right.removeFromRight (240).reduced (4, 0));
+    prevButton.setBounds (right.removeFromRight (30));
 
-    for (auto* s : row)
-    {
-        float units = 0.0f;
-        for (auto* c : s->cells) units += weight (c);
-        const int w = juce::roundToInt (unit * units) + 16;
-        s->area = { juce::roundToInt (x), area.getY(), w, area.getHeight() };
+    keyboard.setBounds (r.removeFromBottom (74).withTrimmedBottom (12));
+    keyboard.setKeyWidth ((float) keyboard.getWidth() / 36.0f);
+    r.removeFromBottom (10);
 
-        auto inner = s->area.reduced (8).withTrimmedTop (26);
-        float cx = (float) inner.getX();
-        for (auto* c : s->cells)
-        {
-            const float cw = unit * weight (c);
-            c->setBounds (juce::roundToInt (cx), inner.getY(), juce::roundToInt (cw), inner.getHeight());
-            cx += cw;
-        }
+    garden.setBounds (r);
+    edit.setBounds (r);
+    mod.setBounds (r);
+    sampleEditor.setBounds (r.reduced (40, 50));
+    drawPanel.setBounds (r.reduced (120, 70));
+}
 
-        x += (float) w + gap;
-    }
+//==============================================================================
+NebulaAudioProcessorEditor::NebulaAudioProcessorEditor (NebulaAudioProcessor& p)
+    : AudioProcessorEditor (&p), processor (p), content (p)
+{
+    setLookAndFeel (&lnf);
+    addAndMakeVisible (content);
+    content.onZoom = [this] (float z) { setZoom (z); };
+    zoom = (float) p.state.state.getProperty ("uiZoom", 1.0f);
+    content.setZoomChoice (zoom);
+    setZoom (zoom);
+}
+
+NebulaAudioProcessorEditor::~NebulaAudioProcessorEditor() { setLookAndFeel (nullptr); }
+
+void NebulaAudioProcessorEditor::setZoom (float z)
+{
+    zoom = juce::jlimit (0.6f, 1.6f, z);
+    processor.state.state.setProperty ("uiZoom", zoom, nullptr);
+    content.setTransform (juce::AffineTransform::scale (zoom));
+    setSize (juce::roundToInt (NebulaContent::designW * zoom), juce::roundToInt (NebulaContent::designH * zoom));
 }
 
 void NebulaAudioProcessorEditor::resized()
 {
-    auto r = getLocalBounds().reduced (14, 0);
-
-    auto header = r.removeFromTop (56);
-    auto tabs = header.withTrimmedLeft (170).removeFromLeft (220).withSizeKeepingCentre (220, 28);
-    gardenTab.setBounds (tabs.removeFromLeft (108));
-    tabs.removeFromLeft (4);
-    editTab.setBounds (tabs);
-    auto presetArea = header.removeFromRight (300).withSizeKeepingCentre (300, 28);
-    prevButton.setBounds (presetArea.removeFromLeft (28));
-    nextButton.setBounds (presetArea.removeFromRight (28));
-    presetBox.setBounds (presetArea.reduced (6, 0));
-
-    keyboard.setBounds (r.removeFromBottom (78).withTrimmedBottom (14));
-    keyboard.setKeyWidth ((float) keyboard.getWidth() / 36.0f); // 5 octavas visibles
-    r.removeFromBottom (12);
-
-    gardenView->setBounds (r);
-
-    const int rowH = (r.getHeight() - 12) / 2;
-    layoutRow ({ &topSection(), &filterSection }, r.removeFromTop (rowH));
-    r.removeFromTop (12);
-    layoutRow ({ &ampSection, &fltEnvSection, &lfoSection, &masterSection }, r.removeFromTop (rowH));
+    content.setBounds (0, 0, NebulaContent::designW, NebulaContent::designH);
 }

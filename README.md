@@ -2,45 +2,85 @@
 
 Sintetizador polifónico (VST3 / AU) para Ableton en Mac, con un modo para *cultivar* sonidos por mutación.
 
+## Novedades de la versión 2
+- Interfaz con **íconos** en lugar de texto; pasa el mouse sobre cualquier cosa para ver qué hace. Tiene un selector de **tamaño de ventana** (80–130 %).
+- **Animaciones** en el Jardín (los brotes crecen y se transforman) y un **osciloscopio circular** alrededor de la semilla.
+- Ondas nuevas: **Pulso con PWM**, **Super Saw**, **Sync** y **Wavetable**. La Wavetable incluye la **Onda libre**, hecha desde tu audio o dibujada a mano.
+- **Unísono** de hasta 7 voces, con desafinación y ancho estéreo.
+- **Dos filtros** de 12 o 24 dB, con carácter Limpio, Cálido o Saturado, en serie o en paralelo. Tienen una gráfica con puntos que se arrastran.
+- **3 envolventes** con gráfica editable y modo Loop, **2 LFOs** con sync a tempo, y una **matriz de modulación** de 8 × 10.
+- **Poli / Mono / Legato**, glide, número de voces, rango del pitch bend y sensibilidad a la velocidad.
+- Sample: **Elegir sección**, con zoom, Escuchar, Auto y corrección de nota. El modo **Tempo** sincroniza los sonidos largos al BPM. El audio **se guarda dentro del proyecto**.
+- **Presets propios**: se guardan en `~/Music/Nebula/Presets`.
+
 ## Cómo se usa
 
-**Pestaña JARDÍN**
-- En el centro está la **semilla**, que es el sonido actual. Alrededor hay **8 brotes**, que son variaciones de la semilla. Cuanto más lejos está un brote, más distinto suena.
+### Pestaña JARDÍN
+- En el centro está la **semilla**, que es el sonido actual. Alrededor hay **8 brotes**, que son variaciones de la semilla.
 - **Clic** en un brote: suena y se vuelve el sonido activo.
-- **Doble clic** en un brote: se planta como nueva semilla y germinan 8 variaciones nuevas.
+- **Doble clic** en un brote, o el botón **Plantar**: se vuelve la nueva semilla y germinan 8 variaciones.
 - **Clic en la semilla**: regresas a ella.
-- **Mutación**: cuánto cambian los brotes en la próxima tanda.
-- **Otra tanda**: nuevas variaciones de la misma semilla.
-- **Semilla al azar**: empieza de cero con un sonido aleatorio.
-- **Atrás**: regresa a la generación anterior.
-- **Fijar envolvente**: las mutaciones no tocan el ataque, el decaimiento, el sostenido ni la liberación.
+- **Mutación**: cuánto cambian los brotes.
+- Botones:
+  - **Otra tanda**: nuevas variaciones de la misma semilla.
+  - **Al azar**: empieza desde un sonido aleatorio.
+  - **Atrás**: regresa a la generación anterior.
+  - **Fijar env**: las mutaciones no tocan la envolvente de volumen.
+  - **Escuchar**: suena al elegir un brote.
+- La forma y el color de cada brote salen de su sonido. Cuando el sonido cambia, la figura se transforma suavemente.
 
-La forma y el color de cada brote salen de su sonido:
-- color: brillo del filtro, drive, FM y ruido
-- número de pétalos: formas de onda
-- picos: resonancia
-- núcleo: sub-oscilador
-- tamaño: sostenido
+**Arrastrar un audio** (columna SAMPLE)
 
-**Arrastrar un audio** (columna SAMPLE del Jardín)
+Arrastra un WAV, AIFF, MP3, FLAC u OGG de hasta 120 s, o usa el botón de la carpeta. Luego:
+- **Elegir sección** (tijeras): abre una vista grande para escoger qué parte del audio se usa.
+  - Arrastra las banderitas de inicio y fin.
+  - La rueda del mouse hace zoom y arrastrar mueve la vista. El doble clic usa todo el audio.
+  - **Escuchar** reproduce solo la sección. **Auto** quita los silencios. **Nota** corrige la nota raíz si se detectó mal.
+- **Imitar con el sinte** (varita): el sinte busca el patch que más se parece a la sección elegida.
+- **Usar el sample** (onda): tocas la sección como instrumento.
+- **Hacer onda** (círculo): convierte la sección en una wavetable para el oscilador 1. Eliges cuántos cuadros en la ventana de Elegir sección.
 
-Arrastra un WAV, AIFF, MP3, FLAC u OGG al Jardín, o haz clic en el recuadro para buscarlo. Nebula detecta su nota y te deja elegir:
-- **Imitar con el sinte**: el sinte prueba unos mil patches durante 5–15 segundos y se queda con el que más se parece. Te muestra un % de parecido, y ese patch se vuelve la semilla. Funciona mejor con sonidos de sinte, bajos, pads, plucks y tonos sostenidos. Con voces, instrumentos acústicos o percusión el resultado es una aproximación.
-- **Usar el sample**: tocas tu audio como instrumento, afinado según el teclado. Los brotes cambian inicio, afinación, reversa, loop, textura granular, filtro y envolventes. Con textura alta el sonido se estira y se congela, como un pad.
+### Sonidos largos sincronizados al tempo
+En **Editar → Sample**, cambia de **Clásico** a **Tempo** (metrónomo) y elige la **Duración**:
+- Auto, o de 1/4 de tiempo a 8 compases.
+- La sección se estira o se encoge para durar exactamente eso al BPM de Ableton, sin cambiar el tono.
+- Si cambias el BPM del proyecto, se ajusta solo en la siguiente nota.
 
-Ableton guarda la ruta del sample con el proyecto. Si mueves o borras el archivo, tendrás que volver a cargarlo.
+### Pestaña EDITAR
+- **Osciladores**: un ícono por onda, con su vista previa. **Forma** cambia según la onda:
+  - Pulso: el ancho.
+  - Super Saw: la desafinación.
+  - Sync: la intensidad.
+  - Wavetable: la posición.
 
-**Pestaña EDITAR**: todos los knobs. Doble clic en un knob lo regresa a su valor por defecto.
+  Con Wavetable aparece el selector de tabla y el **lápiz** para dibujar tu propia onda.
+- **Mezcla** (osc 1/2, sub, FM, ruido) y **Unísono**.
+- **Filtros**: arrastra los puntos de la gráfica. Izquierda y derecha cambian el corte; arriba y abajo, la resonancia. Doble clic en un punto lo regresa al valor por defecto. El botón al lado del filtro 2 lo enciende, y los íconos de cadena eligen serie o paralelo.
+- **Envolvente de volumen**: arrastra los puntos A, D/S y R. La rueda del mouse cambia la curva.
+- **Voces y salida**: Poli, Mono o Legato; número de voces, glide, bend, velocidad y volumen.
 
-Todo se guarda con tu proyecto de Ableton, incluido el jardín.
+Doble clic en cualquier perilla la regresa a su valor por defecto.
 
-## Motor de sonido
-Dos motores: **Sinte** (2 osciladores seno/triángulo/sierra/cuadrada con anti-aliasing, FM) y **Sample** (reproducción con afinación, reversa, loop y granular). En ambos: sub-oscilador, ruido, filtro de 3 tipos con resonancia y drive, 2 envolventes ADSR, LFO a filtro y a tono, 12 voces y 8 presets.
+### Pestaña MODULACIÓN
+- **Envolventes 1–3** con gráfica y botón **Loop**. La Env 2 también mueve los filtros con las perillas "Env".
+- **LFO 1 y 2**: forma, velocidad libre o a tempo (Sync), entrada suave (fade-in) y reinicio con cada nota.
+- **Matriz**:
+  - Las columnas son fuentes y las filas, destinos.
+  - Arrastra una casilla hacia arriba o hacia abajo para modular en positivo o en negativo. Doble clic la borra.
+  - **Tiempo** acelera o frena todas las envolventes y LFOs. **Cantidad** escala toda la modulación.
+
+### Presets
+Usa las flechas para recorrer los presets.
+- El **disquete** guarda tu sonido con un nombre.
+- La **carpeta** abre donde se guardan.
+- Tus presets aparecen en la lista bajo "Tus presets".
+
+Todo se guarda con tu proyecto de Ableton: el sonido, el jardín, el sample (hasta 60 s), la sección y la onda dibujada.
 
 ## Compilar (lo hace GitHub solo)
 Cada vez que subes cambios, GitHub compila el plugin en una Mac en la nube y genera `Nebula-Instalador-x.y.z.pkg`. Lo encuentras en la pestaña **Actions**: abre la ejecución más reciente y baja hasta **Artifacts**.
 
-Si cambias algo y quieres que Ableton lo note, sube la versión en `CMakeLists.txt` (`project(NebulaSynth VERSION 1.0.1)`).
+Si cambias algo y quieres que Ableton lo note, sube la versión en `CMakeLists.txt` (`project(NebulaSynth VERSION 2.0.1)`).
 
 ### Compilar en tu Mac (opcional)
 ```

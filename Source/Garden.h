@@ -114,7 +114,7 @@ public:
             else
             {
                 const auto& presets = factoryPresets();
-                applyPreset (state, ops.random().nextInt ((int) presets.size()));
+                applyPreset (state, ops.random().nextInt ((int) presets.size()), true);
                 g = ops.mutate (capture(), 0.85f, false);
                 g = ops.mutate (g, 0.6f, false);
             }

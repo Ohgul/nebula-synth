@@ -2,7 +2,6 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "../Source/PluginProcessor.h"
 #include "../Source/Presets.h"
-#include "../Source/GardenView.h"
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter();
 
@@ -254,49 +253,6 @@ int main (int argc, char** argv)
     juce::Thread::sleep (300);
     std::printf ("Cancelar imitacion: %s\n", proc->isImitating() ? "FALLO" : "OK");
     if (proc->isImitating()) ++failures;
-
-    // ---------- Capturas de la interfaz ----------
-    {
-        juce::Thread::sleep (300);
-        proc->setSample (SampleTools::fromBuffer (makeVowel (220.0, 1.5), sr, "voz_prueba"));
-        std::unique_ptr<juce::AudioProcessorEditor> ed (proc->createEditor());
-
-        std::function<void (juce::Component*, std::function<void (juce::Component*)>)> walk =
-            [&walk] (juce::Component* c, std::function<void (juce::Component*)> fn) { fn (c); for (auto* ch : c->getChildren()) walk (ch, fn); };
-        auto button = [&] (const juce::String& txt)
-        {
-            juce::TextButton* found = nullptr;
-            walk (ed.get(), [&] (juce::Component* c) { if (auto* b = dynamic_cast<juce::TextButton*> (c); b && b->getButtonText() == txt) found = b; });
-            return found;
-        };
-        auto refreshPanel = [&] { walk (ed.get(), [] (juce::Component* c) { if (auto* p = dynamic_cast<SamplePanel*> (c)) p->update(); }); };
-        auto snap = [&] (const char* name)
-        {
-            auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 2.0f);
-            auto f = outDir.getChildFile (name);
-            f.deleteFile();
-            juce::FileOutputStream fos (f);
-            juce::PNGImageFormat().writeImageToStream (img, fos);
-        };
-
-        refreshPanel();
-        snap ("ui_sample_cargado.png");
-        button ("Imitar con el sinte")->onClick();
-        juce::Thread::sleep (2500);
-        refreshPanel();
-        snap ("ui_imitando.png");
-        while (proc->isImitating()) juce::Thread::sleep (50);
-        proc->applyImitationResult();
-        refreshPanel();
-        snap ("ui_imitado.png");
-
-        button ("Usar el sample")->onClick();
-        refreshPanel();
-        snap ("ui_usar_sample.png");
-        ed->resized();
-        button ("EDITAR")->setToggleState (true, juce::sendNotificationSync);
-        snap ("ui_editar_sample.png");
-    }
 
     std::printf ("%s\n", failures == 0 ? "TODO OK" : "HAY FALLOS");
     proc.reset();

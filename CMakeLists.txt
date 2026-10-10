@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.22)
 set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "")
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "")
 
-project(NebulaSynth VERSION 1.1.0)
+project(NebulaSynth VERSION 2.0.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -23,6 +23,7 @@ set(NEBULA_SOURCES
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
     Source/GardenView.cpp
+    Source/Views.cpp
 )
 
 juce_add_plugin(NebulaSynth
@@ -62,19 +63,14 @@ target_link_libraries(NebulaSynth
 )
 
 # ---- Prueba opcional (renderiza audio a WAV sin abrir un DAW) ----
-option(NEBULA_BUILD_TESTS "Compilar la prueba de render" OFF)
+option(NEBULA_BUILD_TESTS "Compilar las pruebas sin DAW" OFF)
 if(NEBULA_BUILD_TESTS)
-    juce_add_console_app(NebulaRenderTest PRODUCT_NAME "NebulaRenderTest")
-    target_sources(NebulaRenderTest PRIVATE ${NEBULA_SOURCES} tests/RenderTest.cpp)
-    target_compile_definitions(NebulaRenderTest PRIVATE
-        JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_DISPLAY_SPLASH_SCREEN=0)
-    target_link_libraries(NebulaRenderTest PRIVATE
-        juce::juce_audio_utils juce::juce_dsp juce::juce_recommended_config_flags)
-
-    juce_add_console_app(NebulaImitateTest PRODUCT_NAME "NebulaImitateTest")
-    target_sources(NebulaImitateTest PRIVATE ${NEBULA_SOURCES} tests/ImitateTest.cpp)
-    target_compile_definitions(NebulaImitateTest PRIVATE
-        JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_DISPLAY_SPLASH_SCREEN=0)
-    target_link_libraries(NebulaImitateTest PRIVATE
-        juce::juce_audio_utils juce::juce_dsp juce::juce_recommended_config_flags)
+    foreach(t Render Imitate V2 Ui)
+        juce_add_console_app(Nebula${t}Test PRODUCT_NAME "Nebula${t}Test")
+        target_sources(Nebula${t}Test PRIVATE ${NEBULA_SOURCES} tests/${t}Test.cpp)
+        target_compile_definitions(Nebula${t}Test PRIVATE
+            JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_DISPLAY_SPLASH_SCREEN=0 JUCE_MODAL_LOOPS_PERMITTED=1)
+        target_link_libraries(Nebula${t}Test PRIVATE
+            juce::juce_audio_utils juce::juce_dsp juce::juce_recommended_config_flags)
+    endforeach()
 endif()

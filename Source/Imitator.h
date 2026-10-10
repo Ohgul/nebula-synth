@@ -10,21 +10,40 @@
 class OfflineSynth
 {
 public:
-    explicit OfflineSynth (const std::vector<juce::RangedAudioParameter*>& p)
-        : params (p),
-          values (new std::atomic<float>[p.size()]),
-          pointers ([this] (const char* id) { return lookup (id); })
+    OfflineSynth (const juce::Array<juce::AudioProcessorParameter*>& all,
+                  const std::vector<juce::RangedAudioParameter*>& genomeParams,
+                  const WavetableBank& bank)
+        : genomeParamList (genomeParams),
+          pointers ([this] (const juce::String& id) { return lookup (id); }),
+          ctx (pointers, noSample, bank),
+          synth (ctx)
     {
-        for (size_t i = 0; i < params.size(); ++i)
-            values[i] = params[i]->convertFrom0to1 (params[i]->getDefaultValue());
+        for (auto* p : all)
+            if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (p))
+            {
+                ids.add (rp->getParameterID());
+                ranged.push_back (rp);
+            }
+        values.reset (new std::atomic<float>[ranged.size()]);
+        for (size_t i = 0; i < ranged.size(); ++i)
+            values[i] = ranged[i]->convertFrom0to1 (ranged[i]->getDefaultValue());
+        resolved = true;
+        pointers = ParamPointers ([this] (const juce::String& id) { return lookup (id); });
+
+        for (auto* gp : genomeParamList)
+            genomeIndex.push_back (ids.indexOf (gp->getParameterID()));
+
         synth.addSound (new SynthSound());
-        synth.addVoice (new SynthVoice (pointers, noSample));
+        synth.addVoice (new SynthVoice (ctx));
     }
 
     void setGenome (const Genome& g)
     {
-        for (size_t i = 0; i < params.size() && i < g.genes.size(); ++i)
-            values[i] = params[i]->convertFrom0to1 (g.genes[i]);
+        for (size_t i = 0; i < genomeParamList.size() && i < g.genes.size(); ++i)
+            if (genomeIndex[i] >= 0)
+                values[(size_t) genomeIndex[i]] = genomeParamList[i]->convertFrom0to1 (g.genes[i]);
+        // Interpretación fija para la búsqueda: una voz, sin glide
+        set (ParamID::polyMode, 0.0f); set (ParamID::voiceCount, 1.0f); set (ParamID::glide, 0.0f);
     }
 
     void render (std::vector<float>& out, int note, int holdSamples, int totalSamples, double sr)
@@ -37,10 +56,11 @@ public:
                 v->prepare (sr);
         }
         synth.allNotesOff (0, false);
+        ctx.lastNote = -1.0f;
 
         out.assign ((size_t) totalSamples, 0.0f);
         constexpr int block = 512;
-        juce::AudioBuffer<float> buf (1, block);
+        juce::AudioBuffer<float> buf (2, block);
         for (int pos = 0; pos < totalSamples; pos += block)
         {
             const int n = juce::jmin (block, totalSamples - pos);
@@ -49,25 +69,34 @@ public:
             if (pos == 0) midi.addEvent (juce::MidiMessage::noteOn (1, note, (juce::uint8) 100), 0);
             if (holdSamples >= pos && holdSamples < pos + n)
                 midi.addEvent (juce::MidiMessage::noteOff (1, note), holdSamples - pos);
+            ctx.blockTime = pos / sr;
             synth.renderNextBlock (buf, midi, 0, n);
-            std::copy (buf.getReadPointer (0), buf.getReadPointer (0) + n, out.begin() + pos);
+            for (int i = 0; i < n; ++i)
+                out[(size_t) (pos + i)] = 0.5f * (buf.getSample (0, i) + buf.getSample (1, i));
         }
     }
 
 private:
-    std::atomic<float>* lookup (const char* id)
+    void set (const char* id, float v) { const int i = ids.indexOf (id); if (i >= 0) values[(size_t) i] = v; }
+
+    std::atomic<float>* lookup (const juce::String& id)
     {
-        for (size_t i = 0; i < params.size(); ++i)
-            if (params[i]->getParameterID() == id) return &values[i];
-        static std::atomic<float> dummy { 0.0f };
-        return &dummy;
+        if (! resolved) return &dummy;   // primera construcción (antes de crear los valores)
+        const int i = ids.indexOf (id);
+        return i >= 0 ? &values[(size_t) i] : &dummy;
     }
 
-    const std::vector<juce::RangedAudioParameter*>& params;
+    const std::vector<juce::RangedAudioParameter*>& genomeParamList;
+    juce::StringArray ids;
+    std::vector<juce::RangedAudioParameter*> ranged;
+    std::vector<int> genomeIndex;
     std::unique_ptr<std::atomic<float>[]> values;
+    std::atomic<float> dummy { 0.0f };
+    bool resolved = false;
     ParamPointers pointers;
     SampleSource noSample;
-    juce::Synthesiser synth;
+    VoiceContext ctx;
+    NebulaSynth synth;
     double currentRate = 0.0;
 };
 
@@ -76,18 +105,19 @@ private:
 class Imitator : private juce::Thread
 {
 public:
-    explicit Imitator (const juce::AudioProcessor& proc)
-        : juce::Thread ("Nebula imitacion"), ops (proc) {}
+    Imitator (const juce::AudioProcessor& proc, const WavetableBank& b)
+        : juce::Thread ("Nebula imitacion"), ops (proc), processor (proc), bank (b) {}
 
     ~Imitator() override { stopThread (4000); }
 
     // Duración de la búsqueda: generaciones × hijos por generación
     int generations = 40, childrenPerGeneration = 24, elites = 8;
 
-    void start (std::shared_ptr<const SampleData> sample, const Genome& current)
+    void start (std::shared_ptr<const SampleData> sample, const Genome& current, float regionStart, float regionEnd, float rootOffset)
     {
         stopThread (4000);
         target = std::move (sample);
+        rStart = regionStart; rEnd = regionEnd; rootFix = rootOffset;
         startGenome = current;
         progress = 0.0f;
         similarity = 0.0f;
@@ -110,12 +140,15 @@ private:
     void run() override
     {
         constexpr double sr = 44100.0;
-        OfflineSynth offline (ops.parameters());
+        OfflineSynth offline (processor.getParameters(), ops.parameters(), bank);
         SoundAnalyser analyser;
 
-        // ---- Preparar el objetivo: desde el ataque, hasta 2.5 s ----
-        const float* x = target->data();
-        const int n = target->length();
+        // ---- Preparar el objetivo: la región elegida, desde el ataque, hasta 2.5 s ----
+        const int fullLen = target->length();
+        const int a0 = juce::jlimit (0, fullLen - 2, (int) (rStart * (float) fullLen));
+        const int a1 = juce::jlimit (a0 + 2, fullLen, (int) (rEnd * (float) fullLen));
+        const float* x = target->data() + a0;
+        const int n = a1 - a0;
         float peak = 0.0f;
         for (int i = 0; i < n; ++i) peak = juce::jmax (peak, std::abs (x[i]));
         int onset = 0;
@@ -126,7 +159,7 @@ private:
         const double lengthS = juce::jlimit (0.15, 2.5, (end - onset) / target->sampleRate);
         const SoundFeatures want = analyser.analyse (x + onset, n - onset, target->sampleRate, lengthS);
 
-        renderNote = target->hasPitch ? (float) juce::roundToInt (target->rootNote) : 48.0f;
+        renderNote = target->hasPitch ? (float) juce::roundToInt (target->rootNote + rootFix) : 48.0f;
         const int note = juce::jlimit (12, 115, (int) renderNote);
         const int total = (int) (lengthS * sr) + 1024;
         const int hold = (int) (lengthS * 0.85 * sr);
@@ -214,6 +247,9 @@ private:
     }
 
     GenomeOps ops;
+    const juce::AudioProcessor& processor;
+    const WavetableBank& bank;
+    float rStart = 0.0f, rEnd = 1.0f, rootFix = 0.0f;
     std::shared_ptr<const SampleData> target;
     Genome startGenome, best;
     float renderNote = 48.0f;

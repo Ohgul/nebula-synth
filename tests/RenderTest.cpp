@@ -184,27 +184,6 @@ int main (int argc, char** argv)
         if (! same) ++failures;
     }
 
-    // Capturas de la interfaz (pestaña Jardín y pestaña Editar)
-    garden.mutation = 0.85f;
-    garden.newRandomSeed();
-    garden.selectSprout (2);
-    {
-        std::unique_ptr<juce::AudioProcessorEditor> ed (proc->createEditor());
-        auto save = [&] (const char* name)
-        {
-            auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 2.0f);
-            auto f = outDir.getChildFile (name);
-            f.deleteFile();
-            juce::FileOutputStream fos (f);
-            juce::PNGImageFormat().writeImageToStream (img, fos);
-        };
-        save ("interfaz_jardin.png");
-        for (auto* c : ed->getChildren())
-            if (auto* b = dynamic_cast<juce::TextButton*> (c); b != nullptr && b->getButtonText() == "EDITAR")
-                b->setToggleState (true, juce::sendNotificationSync);
-        save ("interfaz_editar.png");
-    }
-
     proc->releaseResources();
     std::printf ("%s\n", failures == 0 ? "TODO OK" : "HAY FALLOS");
     return failures == 0 ? 0 : 1;
