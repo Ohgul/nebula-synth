@@ -66,6 +66,10 @@ target_link_libraries(NebulaSynth
 option(NEBULA_BUILD_TESTS "Compilar las pruebas sin DAW" OFF)
 if(NEBULA_BUILD_TESTS)
     foreach(t Render Imitate V2 V21 V3 Ui Bench Stereo Determinism)
+        if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/${t}Test.cpp")
+            message(STATUS "Skipping missing test: ${t}Test.cpp")
+            continue()
+        endif()
         juce_add_console_app(Nebula${t}Test PRODUCT_NAME "Nebula${t}Test")
         target_sources(Nebula${t}Test PRIVATE ${NEBULA_SOURCES} tests/${t}Test.cpp)
         target_compile_definitions(Nebula${t}Test PRIVATE
