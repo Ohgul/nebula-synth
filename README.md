@@ -2,6 +2,28 @@
 
 Sintetizador polifónico (VST3 / AU) para Ableton en Mac, con un modo para *cultivar* sonidos por mutación.
 
+## Novedades de la versión 3
+- **Concepto neuronal**: el Jardín ahora es un **Cerebro**.
+  - Tu sonido es el cerebro del centro y las variaciones son neuronas conectadas por axones que disparan pulsos.
+  - Todo el fondo es una red viva.
+  - Entre más te alejas del sonido original o más subes **LOCURA**, más se transforma la interfaz: colores más calientes, neuronas que tiemblan, glitches.
+- **Recrear de verdad (resíntesis nueva)**:
+  - Nebula reconstruye el sample con armónicos que cambian en el tiempo, parciales sueltos (campanas, metales, golpes, el barrido de un 808) y ruido por bandas.
+  - Sigue la curva de tono real (vibratos, glides o la melodía) y el ancho estéreo.
+  - Todo queda **afinado a C**: en la tecla C suena C.
+- **A/B**: compara el original contra lo recreado, al mismo volumen.
+- **Panel del sample simplificado**: el audio, un botón **RECREAR**, el % de parecido y "¿Cómo se hizo?". Sección y Limpiar quedan abajo, chiquitos.
+- **Perillas estilo Moog con anillo de LEDs**, más chicas y con mejor respuesta: la FM, la resonancia, el drive y el corte trabajan desde el principio de la perilla.
+- **Botones de encendido** en el osc 1, osc 2, sub, ruido, unísono, filtro 1, filtro 2, LFOs, granos y cada efecto.
+- **Pestaña Efectos**: EQ, compresor, chorus, delay (a tempo o en ms, ping pong) y reverb, más el ancho estéreo.
+- **Macros** siempre a la mano: Brillo, Cuerpo, Movimiento, Espacio y **LOCURA**.
+- **Cerebro**: **Mezclar** (de tu sonido a la neurona elegida, poco a poco), **Cruzar** dos neuronas y una memoria de generaciones.
+- **Arrastra a Ableton**: las notas de una frase como **MIDI**, el sonido como **audio** y la **onda** (para Wavetable, Serum o Vital). Con un clic se guardan en Música/Nebula/Exportados.
+- **Explorador de sonidos**: 34 presets con categorías, búsqueda y favoritos.
+- **Deshacer y rehacer**.
+- **Calidad** Normal, Alta (2x) o Ultra (4x), contra el aliasing.
+- **Deriva analógica** y **MPE**.
+
 ## Novedades de la versión 2.1
 - **Recrear sonido (resíntesis)**: Nebula analiza tu audio y lo reconstruye con sus propios osciladores.
   - Saca la nota exacta (con cents), una tabla de ondas que cambia en el tiempo (un cuadro por momento, con todos sus armónicos), el ruido con su envolvente y el vibrato.

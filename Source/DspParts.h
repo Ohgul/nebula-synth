@@ -330,7 +330,7 @@ public:
         kFirst = twoStages ? 1.0 / 0.5412 : k;    // Butterworth de 4º orden: Q 0.54 y 1.31
         if (twoStages && reso < 0.02f) k = 1.0 / 1.3066;
         G = g / (1.0 + g);
-        kLad = 3.96 * std::pow ((double) reso, 0.9);
+        kLad = 3.96 * std::pow ((double) reso, 0.75);
 
         // Totalmente abierto (pasa bajos, sin resonancia): sin filtro = transparencia total
         const bool open = type == FilterKind::LowPass && cutoffHz > 17500.0f && reso < 0.05f;
@@ -351,7 +351,7 @@ public:
         const std::complex<double> s (0.0, hz / cutoffHz);
         if (character != Clean)
         {
-            const double kl = 3.96 * std::pow ((double) juce::jlimit (0.0f, 1.0f, resonance), 0.9);
+            const double kl = 3.96 * std::pow ((double) juce::jlimit (0.0f, 1.0f, resonance), 0.75);
             const auto p = 1.0 / (1.0 + s);
             const auto u = 1.0 / (1.0 + kl * p * p * p * p);
             const auto y1 = u * p, y2 = y1 * p, y3 = y2 * p, y4 = y3 * p;
@@ -375,7 +375,7 @@ public:
     }
 
 private:
-    static double qFor (float r) { return 0.707 * std::pow (14.0, (double) juce::jlimit (0.0f, 1.0f, r)); }
+    static double qFor (float r) { return 0.707 * std::pow (14.0, std::pow ((double) juce::jlimit (0.0f, 1.0f, r), 0.7)); }   // la resonancia se oye desde temprano
 
     template <typename T>
     static T ladderMix (int kind, bool fourPole, T x, T y1, T y2, T y3, T y4)

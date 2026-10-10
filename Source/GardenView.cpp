@@ -16,7 +16,7 @@ namespace
 //==============================================================================
 GardenCanvas::GardenCanvas (NebulaAudioProcessor& p) : processor (p), garden (p.garden)
 {
-    setTooltip ("Clic en un brote: escucharlo. Doble clic: plantarlo y que germinen 8 nuevas variaciones. Clic en la semilla: volver a ella.");
+    setTooltip ("Clic en una neurona: escucharla. Doble clic: se vuelve tu sonido y nacen 8 neuronas nuevas. Clic en el cerebro: volver a tu sonido.");
 }
 
 void GardenCanvas::resized()
@@ -61,6 +61,13 @@ void GardenCanvas::mouseDown (const juce::MouseEvent& e)
     if (e.getNumberOfClicks() > 1) return;
     const int h = hitTest (e.position);
     if (h == none) return;
+    if (crossMode && h >= 0 && garden.selected >= 0 && h != garden.selected)
+    {
+        seedFrom = (sproutPos (h) + sproutPos (garden.selected)) * 0.5f;
+        garden.cross (garden.selected, h);
+        if (onCrossed) onCrossed();
+        return;
+    }
     if (h == seedIndex) garden.selectSeed();
     else                garden.selectSprout (h);
     if (onSelect) onSelect();
@@ -85,7 +92,7 @@ GardenCanvas::Blob GardenCanvas::target (const Genome& gen) const
     if (! gen.isValid()) return b;
     auto v = [&] (const char* id) { return garden.real (gen, id); };
 
-    const bool sampler = v (ParamID::engine) > 0.5f;
+    const bool sampler = juce::roundToInt (v (ParamID::engine)) != Engine::Synth;
     const int   w1     = (int) v (ParamID::osc1Wave);
     const int   w2     = (int) v (ParamID::osc2Wave);
     const float shape  = v (ParamID::osc1Shape);
@@ -180,7 +187,7 @@ void GardenCanvas::drawBlob (juce::Graphics& g, juce::Point<float> c, float r, c
     {
         const int idx = i % profileSize;
         const float t = juce::MathConstants<float>::twoPi * (float) idx / (float) profileSize;
-        const float jitter = b.noise * 0.08f * (std::sin (t * 13.0f + phase * 3.0f) + 0.6f * std::sin (t * 29.0f - phase * 2.0f));
+        const float jitter = (b.noise * 0.08f + 0.12f * Neural::level()) * (std::sin (t * 13.0f + phase * 3.0f) + 0.6f * std::sin (t * 29.0f - phase * 2.0f));
         const float rr = r * (b.prof[(size_t) idx] + jitter);
         const juce::Point<float> pt (c.x + rr * std::cos (t + rot), c.y + rr * std::sin (t + rot));
         if (i == 0) shape.startNewSubPath (pt); else shape.lineTo (pt);
@@ -188,19 +195,21 @@ void GardenCanvas::drawBlob (juce::Graphics& g, juce::Point<float> c, float r, c
     shape.closeSubPath();
 
     const float glow = (selected ? 0.55f : isHover ? 0.35f : 0.18f) + glowBoost * 0.4f;
+    Blob hb = b; hb.colour = Neural::hot (b.colour);
+    const auto& bb = hb;
     const float haloR = r * (b.halo + glowBoost * 0.25f);
-    g.setGradientFill (juce::ColourGradient (b.colour.withAlpha (juce::jmin (0.9f, glow)), c.x, c.y, b.colour.withAlpha (0.0f), c.x + haloR, c.y, true));
+    g.setGradientFill (juce::ColourGradient (bb.colour.withAlpha (juce::jmin (0.9f, glow)), c.x, c.y, bb.colour.withAlpha (0.0f), c.x + haloR, c.y, true));
     g.fillEllipse (c.x - haloR, c.y - haloR, haloR * 2.0f, haloR * 2.0f);
 
-    g.setGradientFill (juce::ColourGradient (b.colour.brighter (0.6f), c.x - r * 0.3f, c.y - r * 0.3f, b.colour.darker (0.5f), c.x + r, c.y + r, true));
+    g.setGradientFill (juce::ColourGradient (bb.colour.brighter (0.6f), c.x - r * 0.3f, c.y - r * 0.3f, bb.colour.darker (0.5f), c.x + r, c.y + r, true));
     g.fillPath (shape);
-    g.setColour (b.colour.brighter (0.8f).withAlpha (selected ? 1.0f : 0.6f));
+    g.setColour (bb.colour.brighter (0.8f).withAlpha (selected ? 1.0f : 0.6f));
     g.strokePath (shape, juce::PathStrokeType (selected ? 2.2f : 1.1f));
 
     const float coreR = r * b.core;
-    g.setColour (b.colour.darker (0.9f).withAlpha (0.85f));
+    g.setColour (bb.colour.darker (0.9f).withAlpha (0.85f));
     g.fillEllipse (c.x - coreR, c.y - coreR, coreR * 2.0f, coreR * 2.0f);
-    g.setColour (b.colour.brighter (1.0f).withAlpha (0.7f));
+    g.setColour (bb.colour.brighter (1.0f).withAlpha (0.7f));
     g.fillEllipse (c.x - coreR * 0.35f, c.y - coreR * 0.35f, coreR * 0.7f, coreR * 0.7f);
 
     if (selected)
@@ -210,23 +219,124 @@ void GardenCanvas::drawBlob (juce::Graphics& g, juce::Point<float> c, float r, c
     }
 }
 
+void GardenCanvas::drawDendrites (juce::Graphics& g, juce::Point<float> c, float r, const Blob& b, int seed, float phase) const
+{
+    if (! b.init || r <= 2.0f) return;
+    const float cz = Neural::level();
+    const int n = 5 + seed % 3;
+    const auto col = Neural::hot (b.colour);
+    for (int k = 0; k < n; ++k)
+    {
+        const float a = b.rot + juce::MathConstants<float>::twoPi * ((float) k + 0.3f * (float) ((seed * 7 + k * 3) % 5) / 5.0f) / (float) n
+                        + 0.15f * cz * std::sin (phase * 3.0f + (float) k);
+        const float len = r * (1.15f + 0.5f * (float) ((seed + k * 5) % 4) / 3.0f) * (1.0f + 0.25f * cz);
+        const juce::Point<float> d (std::cos (a), std::sin (a));
+        const auto p0 = c + d * (r * 0.8f), p1 = c + d * len;
+        g.setColour (col.withAlpha (0.45f));
+        g.drawLine ({ p0, p1 }, 1.3f);
+        for (int s = -1; s <= 1; s += 2)
+        {
+            const float a2 = a + (float) s * (0.45f + 0.2f * cz * std::sin (phase * 2.0f + (float) (k * s)));
+            const auto p2 = p1 + juce::Point<float> (std::cos (a2), std::sin (a2)) * (len * 0.35f);
+            g.setColour (col.withAlpha (0.3f));
+            g.drawLine ({ p1, p2 }, 1.0f);
+            g.fillEllipse (p2.x - 1.5f, p2.y - 1.5f, 3.0f, 3.0f);
+        }
+    }
+}
+
+// El núcleo: un cerebro que se deforma y se calienta con la locura
+void GardenCanvas::drawBrain (juce::Graphics& g, juce::Point<float> c, float r, const Blob& b, bool selected, bool isHover, float phase) const
+{
+    if (! b.init) return;
+    const float cz = Neural::level();
+    const auto col = Neural::hot (b.colour, 0.05f);
+
+    // Aura
+    const float haloR = r * (1.7f + 0.4f * level + 0.3f * cz);
+    g.setGradientFill (juce::ColourGradient (col.withAlpha ((selected ? 0.45f : isHover ? 0.35f : 0.25f) + 0.3f * level), c.x, c.y,
+                                             col.withAlpha (0.0f), c.x + haloR, c.y, true));
+    g.fillEllipse (c.x - haloR, c.y - haloR, haloR * 2.0f, haloR * 2.0f);
+
+    // Silueta: dos hemisferios con la fisura arriba; con locura se deforma y "late"
+    juce::Path brain;
+    const int steps = 120;
+    for (int i = 0; i <= steps; ++i)
+    {
+        const float t = juce::MathConstants<float>::twoPi * (float) (i % steps) / (float) steps;
+        float rr = r * (1.0f + 0.05f * std::sin (7.0f * t + phase * (0.5f + 4.0f * cz))
+                             + (0.04f + 0.14f * cz) * std::sin (13.0f * t - phase * (1.0f + 6.0f * cz))
+                             + 0.04f * level * std::sin (5.0f * t + phase * 9.0f));
+        const float top = std::exp (-std::pow ((t - 1.5f * juce::MathConstants<float>::pi) / 0.22f, 2.0f));
+        rr *= 1.0f - 0.16f * top;
+        const juce::Point<float> p (c.x + rr * 1.25f * std::cos (t), c.y + rr * 0.92f * std::sin (t));
+        if (i == 0) brain.startNewSubPath (p); else brain.lineTo (p);
+    }
+    brain.closeSubPath();
+    g.setGradientFill (juce::ColourGradient (col.brighter (0.5f), c.x - r * 0.6f, c.y - r * 0.6f, col.darker (0.7f), c.x + r, c.y + r, true));
+    g.fillPath (brain);
+
+    // Circunvoluciones (pliegues)
+    {
+        juce::Graphics::ScopedSaveState ss (g);
+        g.reduceClipRegion (brain);
+        g.setColour (col.darker (0.6f).withAlpha (0.75f));
+        for (int k = 0; k < 9; ++k)
+        {
+            juce::Path fold;
+            const float y0 = c.y - r * 0.85f + (float) k * r * 0.21f;
+            for (int j = 0; j <= 40; ++j)
+            {
+                const float u = (float) j / 40.0f;
+                const float x = c.x - r * 1.3f + u * r * 2.6f;
+                const float y = y0 + r * 0.07f * std::sin (u * 18.0f + (float) k * 1.7f + phase * cz * 2.5f)
+                                   + r * 0.04f * std::sin (u * 41.0f - (float) k + phase * cz * 5.0f);
+                if (j == 0) fold.startNewSubPath (x, y); else fold.lineTo (x, y);
+            }
+            g.strokePath (fold, juce::PathStrokeType (1.6f + 0.6f * cz));
+        }
+        // Fisura central
+        juce::Path fiss;
+        for (int j = 0; j <= 30; ++j)
+        {
+            const float u = (float) j / 30.0f;
+            const float y = c.y - r * 0.95f + u * r * 1.9f;
+            const float x = c.x + r * 0.04f * std::sin (u * 9.0f + phase * cz * 3.0f);
+            if (j == 0) fiss.startNewSubPath (x, y); else fiss.lineTo (x, y);
+        }
+        g.setColour (juce::Colours::black.withAlpha (0.55f));
+        g.strokePath (fiss, juce::PathStrokeType (2.2f));
+    }
+    g.setColour (col.brighter (0.9f).withAlpha (selected ? 1.0f : 0.65f));
+    g.strokePath (brain, juce::PathStrokeType (selected ? 2.2f : 1.3f));
+}
+
 void GardenCanvas::paint (juce::Graphics& g)
 {
     const juce::ScopedLock sl (garden.lock);
     const double now = nowSeconds();
     const float phase = (float) std::fmod (now, 1000.0);
-    const float stretch = juce::jlimit (1.0f, 2.0f, (float) getWidth() / (float) juce::jmax (1, getHeight()));
     const float grow = (float) (now - growStart);
+    const float cz = Neural::level();
 
-    // Anillos de crecimiento
-    g.setColour (panelEdge.withAlpha (0.35f));
-    for (int i = 1; i <= 4; ++i)
+    // Memoria: las generaciones pasadas, como neuronas tenues en un anillo exterior
     {
-        const float d = minDist + (maxDist - minDist) * std::sqrt ((float) i / 4.0f);
-        g.drawEllipse (centre.x - d * stretch, centre.y - d, d * 2.0f * stretch, d * 2.0f, 0.8f);
+        const int past = juce::jmin (32, garden.historySize());
+        const float stretch = juce::jlimit (1.0f, 2.0f, (float) getWidth() / (float) juce::jmax (1, getHeight()));
+        const float rr = maxDist + sproutRadius() * 0.9f;
+        juce::Point<float> prev;
+        for (int i = 0; i < past; ++i)
+        {
+            const float a = -juce::MathConstants<float>::halfPi - juce::MathConstants<float>::twoPi * (float) (i + 1) / 34.0f;
+            const juce::Point<float> p (centre.x + std::cos (a) * rr * stretch, centre.y + std::sin (a) * rr);
+            g.setColour (Neural::hot (accent).withAlpha (0.25f));
+            if (i > 0) g.drawLine ({ prev, p }, 0.8f);
+            g.fillEllipse (p.x - 3.0f, p.y - 3.0f, 6.0f, 6.0f);
+            prev = p;
+        }
     }
 
-    // Tallos (crecen al germinar)
+    // Axones (crecen al evolucionar) con pulsos que viajan
     for (int k = 0; k < Garden::numSprouts; ++k)
     {
         const float t = juce::jlimit (0.0f, 1.0f, (grow - 0.05f * (float) k) / 0.45f);
@@ -234,64 +344,79 @@ void GardenCanvas::paint (juce::Graphics& g)
         const auto p = sproutPos (k);
         const auto dir = (p - centre);
         const juce::Point<float> perp (-dir.y, dir.x);
-        const float bend = 0.18f * std::sin ((float) k * 2.1f + phase * 0.6f);
+        const float bend = (0.18f + 0.25f * cz) * std::sin ((float) k * 2.1f + phase * (0.6f + 2.0f * cz));
         const auto ctrl = centre + dir * 0.5f + perp * bend;
+        auto at = [&] (float u) { const auto a = centre + (ctrl - centre) * u, bpt = ctrl + (p - ctrl) * u; return a + (bpt - a) * u; };
         juce::Path stem;
         stem.startNewSubPath (centre);
         const int steps = 24;
-        for (int i = 1; i <= (int) (steps * t); ++i)
-        {
-            const float u = (float) i / steps;
-            const auto a = centre + (ctrl - centre) * u, bpt = ctrl + (p - ctrl) * u;
-            stem.lineTo (a + (bpt - a) * u);
-        }
+        for (int i = 1; i <= (int) (steps * t); ++i) stem.lineTo (at ((float) i / steps));
         const bool active = garden.selected == k;
-        g.setGradientFill (juce::ColourGradient (accent.withAlpha (0.7f), centre.x, centre.y, accent2.withAlpha (active ? 0.9f : 0.35f), p.x, p.y, false));
-        g.strokePath (stem, juce::PathStrokeType (active ? 3.0f : 1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        const auto c1 = Neural::hot (accent), c2 = Neural::hot (accent2);
+        g.setGradientFill (juce::ColourGradient (c1.withAlpha (0.7f), centre.x, centre.y, c2.withAlpha (active ? 0.9f : 0.35f), p.x, p.y, false));
+        g.strokePath (stem, juce::PathStrokeType (active ? 3.0f : 1.4f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        if (t >= 1.0f)
+        {
+            const int pulses = active ? 3 : 1 + (cz > 0.4f ? 1 : 0);
+            for (int q = 0; q < pulses; ++q)
+            {
+                const float u = std::fmod (phase * (0.35f + 1.2f * cz + (active ? 0.4f : 0.0f)) + (float) k * 0.17f + (float) q / (float) pulses, 1.0f);
+                const auto pp = at (u);
+                g.setColour (c2.withAlpha (0.85f * std::sin (u * juce::MathConstants<float>::pi)));
+                g.fillEllipse (pp.x - 2.5f, pp.y - 2.5f, 5.0f, 5.0f);
+            }
+        }
     }
 
-    // Brotes
+    // Neuronas: dendritas + soma (su forma sale del sonido)
     for (int k = 0; k < Garden::numSprouts; ++k)
     {
         const float s = easeOutBack ((grow - 0.25f - 0.05f * (float) k) / 0.45f);
         const bool sel = garden.selected == k;
-        drawBlob (g, sproutPos (k), sproutRadius() * s, sproutBlobs[(size_t) k], sel, hover == k, phase + (float) k, sel ? level : 0.0f);
+        const auto p = sproutPos (k);
+        drawDendrites (g, p, sproutRadius() * s, sproutBlobs[(size_t) k], k * 13 + garden.generation, phase);
+        drawBlob (g, p, sproutRadius() * s * 0.85f, sproutBlobs[(size_t) k], sel, hover == k, phase + (float) k, sel ? level : 0.0f);
+        if (crossMode && garden.selected >= 0 && k != garden.selected && hover == k)
+        {
+            g.setColour (warm);
+            g.drawEllipse (p.x - sproutRadius() - 8.0f, p.y - sproutRadius() - 8.0f, (sproutRadius() + 8.0f) * 2.0f, (sproutRadius() + 8.0f) * 2.0f, 2.0f);
+        }
     }
 
-    // Semilla (llega desde el brote plantado) + osciloscopio circular alrededor
+    // El cerebro (tu sonido) + osciloscopio circular alrededor
     const bool seedSel = garden.selected == -1;
-    drawBlob (g, seedFrom, seedRadius, seedBlob, seedSel, hover == seedIndex, phase * 0.5f, seedSel ? level : 0.0f);
+    drawBrain (g, seedFrom, seedRadius, seedBlob, seedSel, hover == seedIndex, phase);
     {
         int start = 0;
         for (int i = 1; i < 256; ++i) if (scopeBuf[(size_t) i - 1] <= 0.0f && scopeBuf[(size_t) i] > 0.0f) { start = i; break; }
         float peak = 0.02f;
         for (int i = 0; i < 256; ++i) peak = juce::jmax (peak, std::abs (scopeBuf[(size_t) (start + i)]));
         juce::Path ring;
-        const float baseR = seedRadius * 1.45f;
+        const float baseR = seedRadius * 1.6f;
         for (int i = 0; i < 256; ++i)
         {
             const float a = juce::MathConstants<float>::twoPi * (float) i / 256.0f;
             const float v = scopeBuf[(size_t) (start + i)] / peak;
-            const float rr = baseR * (1.0f + 0.12f * v * juce::jmin (1.0f, level * 4.0f));
-            const juce::Point<float> pt (seedFrom.x + rr * std::sin (a), seedFrom.y - rr * std::cos (a));
+            const float rr = baseR * (1.0f + (0.12f + 0.15f * cz) * v * juce::jmin (1.0f, level * 4.0f));
+            const juce::Point<float> pt (seedFrom.x + rr * 1.15f * std::sin (a), seedFrom.y - rr * std::cos (a));
             if (i == 0) ring.startNewSubPath (pt); else ring.lineTo (pt);
         }
         ring.closeSubPath();
-        g.setColour (accent2.withAlpha (0.12f + 0.6f * level));
+        g.setColour (Neural::hot (accent2).withAlpha (0.12f + 0.6f * level));
         g.strokePath (ring, juce::PathStrokeType (1.5f));
     }
 
     g.setColour (text);
     g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
-    g.drawText ("SEMILLA", juce::Rectangle<float> (centre.x - 60.0f, centre.y + seedRadius * 1.45f + 6.0f, 120.0f, 14.0f), juce::Justification::centred);
+    g.drawText ("TU SONIDO", juce::Rectangle<float> (centre.x - 60.0f, centre.y + seedRadius * 1.6f + 6.0f, 120.0f, 14.0f), juce::Justification::centred);
     g.setColour (textDim);
     g.setFont (juce::FontOptions (11.0f));
-    g.drawText ("generacion " + juce::String (garden.generation),
-                juce::Rectangle<float> (centre.x - 60.0f, centre.y + seedRadius * 1.45f + 20.0f, 120.0f, 14.0f), juce::Justification::centred);
+    g.drawText ("generacion " + juce::String (garden.generation) + (cz > 0.05f ? "  |  locura " + juce::String (juce::roundToInt (cz * 100.0f)) + " %" : juce::String()),
+                juce::Rectangle<float> (centre.x - 100.0f, centre.y + seedRadius * 1.6f + 20.0f, 200.0f, 14.0f), juce::Justification::centred);
 
     // Ayuda con íconos
     auto help = getLocalBounds().removeFromBottom (18).toFloat();
-    const juce::String items[] { "clic: escuchar", "doble clic: plantar", "semilla: volver" };
+    const juce::String items[] { "clic: escuchar", "doble clic: usarla", "cerebro: volver" };
     const juce::Path icons[] { Icons::speaker(), Icons::sprout(), Icons::seed() };
     float x = help.getCentreX() - 230.0f;
     for (int i = 0; i < 3; ++i)
@@ -300,6 +425,12 @@ void GardenCanvas::paint (juce::Graphics& g)
         g.setColour (textDim);
         g.drawText (items[i], juce::Rectangle<float> (x + 18.0f, help.getY(), 130.0f, 18.0f), juce::Justification::centredLeft);
         x += 160.0f;
+    }
+    if (crossMode)
+    {
+        g.setColour (warm);
+        g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
+        g.drawText ("Toca otra neurona para cruzarla con la elegida", getLocalBounds().removeFromTop (22), juce::Justification::centred);
     }
 }
 
@@ -310,53 +441,30 @@ SamplePanel::SamplePanel (NebulaAudioProcessor& p) : processor (p), region (p, f
     region.onClick = [this] { if (processor.sampleSource.get() == nullptr) chooseFile(); else if (onOpenEditor) onOpenEditor(); };
     region.setInterceptsMouseClicks (true, false);
 
-    for (auto* b : { &recreateButton, &imitateButton, &useButton, &waveButton, &editButton, &cleanButton, &recipeButton, &cancelButton })
+    for (auto* b : { &recreateButton, &editButton, &cleanButton, &recipeButton, &cancelButton })
     {
         b->horizontal = true;
         addAndMakeVisible (b);
     }
     addAndMakeVisible (loadButton);
     recreateButton.colour = accent; recreateButton.filled = true;
-    imitateButton.colour = accent;
-    useButton.colour = accent2;     useButton.filled = true;
-    waveButton.colour = warm;       waveButton.filled = true;
     cleanButton.colour = accent2;
     recipeButton.colour = accent;
 
     recreateButton.onClick = [this]
     {
+        message = "Analizando...";
+        repaint();
         const auto r = processor.recreateFromSample();
-        if (r == NebulaAudioProcessor::RecreateResult::Failed) message = "No pude analizar esa seccion.";
-        else if (r == NebulaAudioProcessor::RecreateResult::Imitating)
-            message = processor.lastProfile.inharmonic ? "Es un sonido inarmonico (campana/metal): lo armo con osciladores y FM..."
-                                                       : "No tiene una nota clara: lo armo con osciladores y ruido...";
+        if (r == NebulaAudioProcessor::RecreateResult::Failed) message = "No pude analizar esa seccion. Prueba eligiendo otra parte.";
         else if (onSoundChanged) onSoundChanged();
         update();
     };
-    imitateButton.onClick = [this] { processor.startImitation(); message = {}; update(); };
-    useButton.onClick = [this]
-    {
-        processor.useSampleAsInstrument();
-        message = "Modo sample: los brotes son versiones de tu audio.";
-        if (onSoundChanged) onSoundChanged();
-        update();
-    };
-    waveButton.onClick = [this]
-    {
-        const int frames = framesForWave ? framesForWave() : 32;
-        if (processor.makeWavetableFromSample (frames, 0.3f))
-        {
-            message = "Listo: tu audio ahora es una tabla de ondas en el oscilador 1 (mueve Forma para recorrerla).";
-            if (onSoundChanged) onSoundChanged();
-        }
-        else message = "No pude hacer una onda con ese audio.";
-        update();
-    };
+    editButton.onClick = [this] { if (onOpenEditor) onOpenEditor(); };
     cleanButton.onClick = [this] { if (onOpenCleaner) onOpenCleaner(); };
     recipeButton.onClick = [this] { if (onOpenRecipe) onOpenRecipe(); };
-    editButton.onClick = [this] { if (onOpenEditor) onOpenEditor(); };
     loadButton.onClick = [this] { chooseFile(); };
-    cancelButton.onClick = [this] { processor.cancelImitation(); message = "Busqueda cancelada."; };
+    cancelButton.onClick = [this] { processor.cancelImitation(); message = "Cancelado."; };
 
     seenImitations = processor.imitationCount.load();
     update();
@@ -372,7 +480,8 @@ void SamplePanel::chooseFile()
 void SamplePanel::loadFile (const juce::File& f)
 {
     const auto error = processor.loadSample (f);
-    message = error.isNotEmpty() ? error : "Recrear lo reconstruye con el sinte; Usar el sample lo toca tal cual.";
+    message = error.isNotEmpty() ? error : "Dale RECREAR: Nebula lo reconstruye con su sinte.";
+    recreated = false;
     update();
 }
 
@@ -381,16 +490,17 @@ void SamplePanel::update()
     shown = processor.sampleSource.get();
     const bool imitating = processor.isImitating();
     const bool has = shown != nullptr;
-    for (auto* b : { &recreateButton, &imitateButton, &useButton, &waveButton, &editButton, &cleanButton }) b->setEnabled (has && ! imitating);
+    for (auto* b : { &recreateButton, &editButton, &cleanButton }) b->setEnabled (has && ! imitating);
+    recipeButton.setVisible (recreated || processor.recipeOrigin != NebulaAudioProcessor::RecipeOrigin::None);
     cancelButton.setVisible (imitating);
     loadButton.setVisible (has);
 
     if (const int count = processor.imitationCount.load(); count != seenImitations)
     {
         seenImitations = count;
-        message = juce::String (processor.recipeOrigin == NebulaAudioProcessor::RecipeOrigin::Recreated ? "Recreado" : "Listo")
-                  + ": parecido " + juce::String (juce::roundToInt (processor.lastSimilarity.load() * 100.0f))
-                  + " %. Toca cualquier nota; mira la receta para ver como esta hecho.";
+        recreated = true;
+        message = "Toca cualquier tecla: en C suena C. Usa A/B (abajo) para comparar con el original.";
+        recipeButton.setVisible (true);
         if (onSoundChanged) onSoundChanged();
     }
     repaint();
@@ -399,7 +509,7 @@ void SamplePanel::update()
 void SamplePanel::paint (juce::Graphics& g)
 {
     auto icon = Icons::waveform();
-    Icons::draw (g, icon, { 0.0f, 3.0f, 16.0f, 16.0f }, accent2, 1.5f);
+    Icons::draw (g, icon, { 0.0f, 3.0f, 16.0f, 16.0f }, Neural::hot (accent2), 1.5f);
     g.setColour (text);
     g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
     g.drawText ("SAMPLE", 22, 0, getWidth() - 22, 22, juce::Justification::centredLeft);
@@ -428,34 +538,42 @@ void SamplePanel::paint (juce::Graphics& g)
         g.setColour (textDim);
         g.setFont (juce::FontOptions (11.0f));
         const float root = shown->rootNote + processor.rootOffset();
-        const double sel = (processor.regionEnd() - processor.regionStart()) * shown->length() / shown->sampleRate;
-        juce::String tone = "sin tono";
+        juce::String tone;
         if (shown->melodic && shown->keyTonic >= 0)
-            tone = juce::String (SoundProfiler::noteNames (shown->keyTonic)) + (shown->keyMinor ? " menor" : " mayor") + " (raiz " + SoundProfiler::noteName (root) + ")";
+            tone = "Frase en " + juce::String (SoundProfiler::noteNames (shown->keyTonic)) + (shown->keyMinor ? " menor" : " mayor") + "  ->  en C";
         else if (shown->hasPitch)
-            tone = SoundProfiler::noteWithCents (root);
-        g.drawText (tone + "  |  " + juce::String (sel, 1) + " s", 0, 128, getWidth(), 16, juce::Justification::centredLeft, true);
+            tone = "Original: " + SoundProfiler::noteWithCents (root) + "  ->  afinado a C";
+        else
+            tone = "Sin nota fija (golpe o textura): C = original";
+        g.drawText (tone, 0, 128, getWidth(), 16, juce::Justification::centredLeft, true);
+    }
+
+    // Parecido (grande) después de recrear
+    if (recreated && processor.lastSimilarity.load() >= 0.0f && ! processor.isImitating())
+    {
+        const auto r = juce::Rectangle<int> (0, recreateButton.getBottom() + 10, getWidth(), 40);
+        g.setColour (Neural::hot (accent2));
+        g.setFont (juce::FontOptions (28.0f, juce::Font::bold));
+        g.drawText (juce::String (juce::roundToInt (processor.lastSimilarity.load() * 100.0f)) + " %", r.withWidth (96), juce::Justification::centredLeft);
+        g.setColour (textDim);
+        g.setFont (juce::FontOptions (11.5f));
+        g.drawFittedText ("de parecido con\nel original", r.withTrimmedLeft (96), juce::Justification::centredLeft, 2);
     }
 
     // Estado
-    auto status = juce::Rectangle<int> (0, cancelButton.getY() - 4, getWidth(), 76);
+    auto status = juce::Rectangle<int> (0, recipeButton.getBottom() + 10, getWidth(), 60);
     if (processor.isImitating())
     {
         const float prog = processor.imitationProgress();
-        auto bar = juce::Rectangle<float> (0.0f, (float) recreateButton.getY() - 10.0f, (float) getWidth(), 5.0f);
+        auto bar = juce::Rectangle<float> (0.0f, (float) recreateButton.getBottom() + 8.0f, (float) getWidth(), 5.0f);
         g.setColour (track);
         g.fillRoundedRectangle (bar, 3.0f);
         g.setGradientFill (juce::ColourGradient (accent, bar.getX(), 0.0f, accent2, bar.getRight(), 0.0f, false));
         g.fillRoundedRectangle (bar.withWidth (juce::jmax (6.0f, bar.getWidth() * prog)), 3.0f);
-        g.setColour (text);
-        g.setFont (juce::FontOptions (11.5f));
-        g.drawText ("Buscando... " + juce::String (juce::roundToInt (prog * 100.0f)) + " %  (mejor: "
-                    + juce::String (juce::roundToInt (processor.imitationSimilarity() * 100.0f)) + " %)",
-                    status.withTrimmedTop (34), juce::Justification::topLeft);
     }
     else if (message.isNotEmpty())
     {
-        g.setColour (text.withAlpha (0.9f));
+        g.setColour (text.withAlpha (0.85f));
         g.setFont (juce::FontOptions (11.5f));
         g.drawFittedText (message, status, juce::Justification::topLeft, 4, 1.0f);
     }
@@ -465,19 +583,13 @@ void SamplePanel::resized()
 {
     region.setBounds (dropArea());
     loadButton.setBounds (getWidth() - 26, 110, 26, 22);
-    int y = 150;
-    recreateButton.setBounds (0, y, getWidth(), 36); y += 42;
-    for (auto* b : { &imitateButton, &useButton, &waveButton })
-    {
-        b->setBounds (0, y, getWidth(), 30);
-        y += 36;
-    }
-    editButton.setBounds (0, y, getWidth() / 2 - 3, 30);
-    cleanButton.setBounds (getWidth() / 2 + 3, y, getWidth() - getWidth() / 2 - 3, 30);
-    y += 36;
-    recipeButton.setBounds (0, y, getWidth(), 30);
-    y += 36;
-    cancelButton.setBounds (0, y + 6, 110, 26);
+    recreateButton.setBounds (0, 154, getWidth(), 48);
+    recipeButton.setBounds (0, 262, getWidth(), 28);
+    cancelButton.setBounds (0, 212, 110, 26);
+    // Lo secundario, chiquito y abajo
+    const int y = getHeight() - 30;
+    editButton.setBounds (0, y, getWidth() / 2 - 3, 28);
+    cleanButton.setBounds (getWidth() / 2 + 3, y, getWidth() - getWidth() / 2 - 3, 28);
 }
 
 //==============================================================================
@@ -485,7 +597,7 @@ GardenView::GardenView (NebulaAudioProcessor& p) : processor (p), garden (p.gard
 {
     addAndMakeVisible (canvas);
     addAndMakeVisible (samplePanel);
-    canvas.onSelect = [this] { audition(); refreshButtons(); };
+    canvas.onSelect = [this] { morphSlider.setValue (1.0, juce::dontSendNotification); audition(); refreshButtons(); };
     samplePanel.onSoundChanged = [this] { audition(); refreshButtons(); };
     samplePanel.onOpenEditor = [this] { if (onOpenSampleEditor) onOpenSampleEditor(); };
     samplePanel.framesForWave = [this] { return framesForWave ? framesForWave() : 32; };
@@ -502,8 +614,26 @@ GardenView::GardenView (NebulaAudioProcessor& p) : processor (p), garden (p.gard
     mutationSlider.setColour (juce::Slider::backgroundColourId, track);
     mutationSlider.setColour (juce::Slider::thumbColourId, accent2);
     mutationSlider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
-    mutationSlider.setTooltip ("Mutacion: cuanto cambian los brotes respecto a la semilla");
+    mutationSlider.setTooltip ("Mutacion: cuanto cambian las neuronas nuevas respecto al nucleo");
     addAndMakeVisible (mutationSlider);
+
+    morphSlider.setSliderStyle (juce::Slider::LinearHorizontal);
+    morphSlider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+    morphSlider.setRange (0.0, 1.0, 0.001);
+    morphSlider.setValue (1.0, juce::dontSendNotification);
+    morphSlider.setColour (juce::Slider::trackColourId, accent2);
+    morphSlider.setColour (juce::Slider::backgroundColourId, track);
+    morphSlider.setColour (juce::Slider::thumbColourId, accent);
+    morphSlider.setTooltip ("Mezclar: de tu sonido (izquierda) a la neurona elegida (derecha), poco a poco");
+    morphSlider.onValueChange = [this] { if (garden.selected >= 0) garden.blend (garden.selected, (float) morphSlider.getValue()); };
+    addAndMakeVisible (morphSlider);
+
+    crossButton.horizontal = true;
+    crossButton.setClickingTogglesState (true);
+    crossButton.colour = warm;
+    crossButton.onClick = [this] { canvas.crossMode = crossButton.getToggleState(); };
+    canvas.onCrossed = [this] { crossButton.setToggleState (false, juce::dontSendNotification); canvas.crossMode = false; audition(); refreshButtons(); };
+    addAndMakeVisible (crossButton);
 
     germinateButton.onClick = [this] { garden.germinate(); refreshButtons(); };
     rerollButton.onClick    = [this] { garden.reroll(); refreshButtons(); };
@@ -568,7 +698,9 @@ void GardenView::paintOverChildren (juce::Graphics& g)
 void GardenView::refreshButtons()
 {
     backButton.setEnabled (garden.canGoBack());
-    germinateButton.setButtonText (garden.selected >= 0 ? "Plantar" : "Germinar");
+    germinateButton.setButtonText (garden.selected >= 0 ? "Usar esta" : "Evolucionar");
+    morphSlider.setEnabled (garden.selected >= 0);
+    crossButton.setEnabled (garden.selected >= 0);
 }
 
 void GardenView::audition()
@@ -576,9 +708,7 @@ void GardenView::audition()
     if (! listenButton.getToggleState()) return;
     auto& ks = processor.keyboardState;
     if (noteIsOn) ks.noteOff (1, auditionNoteOn, 0.0f);
-    auditionNoteOn = NebulaAudioProcessor::auditionNote;
-    if (auto s = processor.sampleSource.get(); s != nullptr && s->hasPitch)
-        auditionNoteOn = juce::jlimit (36, 84, juce::roundToInt (s->rootNote + processor.rootOffset()));
+    auditionNoteOn = processor.homeKey();   // todo se escucha en C
     ks.noteOn (1, auditionNoteOn, 0.8f);
     noteIsOn = true;
     noteOffTime = juce::Time::getMillisecondCounterHiRes() + 700.0;
@@ -605,15 +735,19 @@ void GardenView::timerCallback()
 
 void GardenView::paint (juce::Graphics& g)
 {
+    // Panel translúcido: detrás se ve la red neuronal
     const auto r = getLocalBounds().toFloat();
-    g.setColour (panel);
+    g.setColour (panel.withAlpha (0.45f));
     g.fillRoundedRectangle (r, 8.0f);
-    g.setColour (panelEdge);
+    g.setColour (Neural::hot (panelEdge.brighter (0.15f), 0.2f));
     g.drawRoundedRectangle (r.reduced (0.5f), 8.0f, 1.0f);
+    g.setColour (panel.withAlpha (0.7f));
+    g.fillRoundedRectangle (samplePanel.getBounds().toFloat().expanded (6.0f), 6.0f);
 
     g.setColour (textDim);
     g.setFont (juce::FontOptions (11.0f));
     g.drawText ("MUTACION", mutationSlider.getBounds().translated (0, -16).withHeight (14), juce::Justification::centredLeft);
+    g.drawText ("MEZCLAR", morphSlider.getBounds().translated (0, -16).withHeight (14), juce::Justification::centredLeft);
 }
 
 void GardenView::resized()
@@ -625,13 +759,17 @@ void GardenView::resized()
     r.removeFromLeft (14);
     canvas.setBounds (r);
 
-    auto left = bar.removeFromLeft (220);
+    auto left = bar.removeFromLeft (200);
     mutationSlider.setBounds (left.withTrimmedTop (16).reduced (0, 2));
-    bar.removeFromLeft (14);
+    bar.removeFromLeft (12);
     for (auto* b : { &germinateButton, &rerollButton, &randomButton, &backButton })
-        b->setBounds (bar.removeFromLeft (84).reduced (3, 0));
-    bar.removeFromLeft (20);
-    lockEnvButton.setBounds (bar.removeFromLeft (84).reduced (3, 0));
-    lockFilterButton.setBounds (bar.removeFromLeft (84).reduced (3, 0));
-    listenButton.setBounds (bar.removeFromLeft (84).reduced (3, 0));
+        b->setBounds (bar.removeFromLeft (80).reduced (3, 0));
+    bar.removeFromLeft (14);
+    morphSlider.setBounds (bar.removeFromLeft (150).withTrimmedTop (16).reduced (0, 4));
+    bar.removeFromLeft (6);
+    crossButton.setBounds (bar.removeFromLeft (92).withSizeKeepingCentre (92, 32));
+    bar.removeFromLeft (14);
+    lockEnvButton.setBounds (bar.removeFromLeft (76).reduced (3, 0));
+    lockFilterButton.setBounds (bar.removeFromLeft (76).reduced (3, 0));
+    listenButton.setBounds (bar.removeFromLeft (76).reduced (3, 0));
 }

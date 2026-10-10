@@ -19,6 +19,21 @@ namespace NebulaColours
     inline const juce::Colour textDim    { 0xff8d92ab };
 }
 
+// Estado "neuronal" de la interfaz: qué tan loco está el sonido (0..1) y el reloj de animación
+namespace Neural
+{
+    inline std::atomic<float> craziness { 0.0f };
+    inline float level() { return craziness.load(); }
+    // Los colores se calientan con la locura: turquesa/violeta -> magenta -> naranja
+    inline juce::Colour hot (juce::Colour base, float extra = 0.0f)
+    {
+        const float c = juce::jlimit (0.0f, 1.0f, level() + extra);
+        if (c < 0.02f) return base;
+        const auto mid = juce::Colour (0xffff3fb4), top = juce::Colour (0xffff8a3d);
+        return c < 0.6f ? base.interpolatedWith (mid, c / 0.6f) : mid.interpolatedWith (top, (c - 0.6f) / 0.4f);
+    }
+}
+
 class NebulaLookAndFeel : public juce::LookAndFeel_V4
 {
 public:
@@ -51,40 +66,62 @@ public:
         setColour (juce::AlertWindow::outlineColourId, accent);
     }
 
+    // Perilla estilo Moog: tapa negra estriada, falda metálica y anillo de LEDs
     void drawRotarySlider (juce::Graphics& g, int x, int y, int w, int h, float pos,
                            float startAngle, float endAngle, juce::Slider& slider) override
     {
         using namespace NebulaColours;
-        const auto bounds = juce::Rectangle<int> (x, y, w, h).toFloat().reduced (3.0f);
-        const float radius = juce::jmin (bounds.getWidth(), bounds.getHeight()) * 0.5f;
-        const auto centre = bounds.getCentre();
-        const float lineW = juce::jmax (2.5f, radius * 0.13f);
-        const float arcR = radius - lineW * 0.5f;
+        const auto bounds = juce::Rectangle<int> (x, y, w, h).toFloat().reduced (2.0f);
+        const float R = juce::jmin (bounds.getWidth(), bounds.getHeight()) * 0.5f;
+        const auto c = bounds.getCentre();
         const float angle = startAngle + pos * (endAngle - startAngle);
-
-        juce::Path trackPath;
-        trackPath.addCentredArc (centre.x, centre.y, arcR, arcR, 0.0f, startAngle, endAngle, true);
-        g.setColour (track);
-        g.strokePath (trackPath, juce::PathStrokeType (lineW, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-
-        const bool bipolar = slider.getMinimum() < 0.0 && slider.getMaximum() > 0.0;
-        const float from = bipolar ? startAngle + (float) slider.valueToProportionOfLength (0.0) * (endAngle - startAngle) : startAngle;
-        juce::Path value;
-        value.addCentredArc (centre.x, centre.y, arcR, arcR, 0.0f, juce::jmin (from, angle), juce::jmax (from, angle), true);
-        const auto c1 = slider.findColour (juce::Slider::rotarySliderFillColourId, true);
         const bool custom = slider.isColourSpecified (juce::Slider::rotarySliderFillColourId);
-        g.setGradientFill (juce::ColourGradient (custom ? c1 : accent, centre.x - radius, centre.y + radius,
-                                                 custom ? c1.brighter (0.4f) : accent2, centre.x + radius, centre.y - radius, false));
-        g.strokePath (value, juce::PathStrokeType (lineW, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        const auto led = custom ? slider.findColour (juce::Slider::rotarySliderFillColourId) : Neural::hot (accent2);
+        const bool bipolar = slider.getMinimum() < 0.0 && slider.getMaximum() > 0.0;
+        const float zero = bipolar ? (float) slider.valueToProportionOfLength (0.0) : 0.0f;
 
-        const float bodyR = arcR - lineW * 1.3f;
-        g.setColour (slider.isMouseOverOrDragging() ? panelEdge.brighter (0.2f) : panelEdge);
-        g.fillEllipse (centre.x - bodyR, centre.y - bodyR, bodyR * 2.0f, bodyR * 2.0f);
+        // Anillo de LEDs
+        constexpr int numLeds = 15;
+        const float ledR = R - 2.2f, dot = juce::jmax (1.5f, R * 0.075f);
+        for (int i = 0; i < numLeds; ++i)
+        {
+            const float t = (float) i / (numLeds - 1);
+            const float a = startAngle + t * (endAngle - startAngle);
+            const juce::Point<float> p (c.x + ledR * std::sin (a), c.y - ledR * std::cos (a));
+            const bool lit = bipolar ? ((t >= juce::jmin (zero, pos) - 0.01f) && (t <= juce::jmax (zero, pos) + 0.01f) && std::abs (pos - zero) > 0.02f)
+                                     : (t <= pos + 0.01f && pos > 0.005f);
+            if (lit)
+            {
+                g.setColour (led.withAlpha (0.25f));
+                g.fillEllipse (p.x - dot * 2.0f, p.y - dot * 2.0f, dot * 4.0f, dot * 4.0f);
+                g.setColour (led.brighter (0.3f));
+            }
+            else g.setColour (juce::Colour (0xff2a2c36));
+            g.fillEllipse (p.x - dot, p.y - dot, dot * 2.0f, dot * 2.0f);
+        }
 
-        const juce::Point<float> tip (centre.x + (bodyR - 2.0f) * std::sin (angle), centre.y - (bodyR - 2.0f) * std::cos (angle));
-        const juce::Point<float> base (centre.x + bodyR * 0.3f * std::sin (angle), centre.y - bodyR * 0.3f * std::cos (angle));
-        g.setColour (text);
-        g.drawLine ({ base, tip }, 2.0f);
+        // Falda metálica
+        const float skirt = R * 0.74f;
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff4a4d58), c.x, c.y - skirt, juce::Colour (0xff15161b), c.x, c.y + skirt, false));
+        g.fillEllipse (c.x - skirt, c.y - skirt, skirt * 2.0f, skirt * 2.0f);
+        g.setColour (juce::Colours::black.withAlpha (0.6f));
+        g.drawEllipse (c.x - skirt, c.y - skirt, skirt * 2.0f, skirt * 2.0f, 1.0f);
+
+        // Tapa negra con estrías
+        const float cap = R * 0.58f;
+        g.setGradientFill (juce::ColourGradient (juce::Colour (slider.isMouseOverOrDragging() ? 0xff34363f : 0xff2a2b31), c.x, c.y - cap,
+                                                 juce::Colour (0xff0b0b0e), c.x, c.y + cap, false));
+        g.fillEllipse (c.x - cap, c.y - cap, cap * 2.0f, cap * 2.0f);
+        g.setColour (juce::Colours::white.withAlpha (0.06f));
+        for (int i = 0; i < 24; ++i)
+        {
+            const float a = angle + juce::MathConstants<float>::twoPi * (float) i / 24.0f;
+            g.drawLine (c.x + cap * 0.86f * std::sin (a), c.y - cap * 0.86f * std::cos (a), c.x + cap * std::sin (a), c.y - cap * std::cos (a), 1.0f);
+        }
+        // Línea indicadora blanca
+        g.setColour (juce::Colour (0xfff2f2f4));
+        g.drawLine (c.x + cap * 0.2f * std::sin (angle), c.y - cap * 0.2f * std::cos (angle),
+                    c.x + cap * 0.95f * std::sin (angle), c.y - cap * 0.95f * std::cos (angle), juce::jmax (1.6f, R * 0.07f));
     }
 
     void drawComboBox (juce::Graphics& g, int w, int h, bool, int, int, int, int, juce::ComboBox& box) override
@@ -142,10 +179,12 @@ public:
         label.setText (name, juce::dontSendNotification);
         label.setJustificationType (juce::Justification::centred);
         label.setInterceptsMouseClicks (false, false);
+        label.setFont (juce::FontOptions (10.5f));
         addAndMakeVisible (label);
 
         slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-        slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 74, 16);
+        slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 74, 15);
+        slider.setMouseDragSensitivity (170);   // menos recorrido de mouse para ir de punta a punta
         slider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
         slider.setPopupDisplayEnabled (false, false, nullptr);
         addAndMakeVisible (slider);
@@ -157,16 +196,17 @@ public:
 
     void setColour (juce::Colour c) { slider.setColour (juce::Slider::rotarySliderFillColourId, c); }
 
+    // Perillas compactas: como mucho "maxKnob" px, con el nombre arriba y el valor abajo, todo centrado
     void resized() override
     {
         auto r = getLocalBounds();
-        // Si sobra alto, el valor queda pegado a la perilla y el conjunto se centra
-        const int ideal = 15 + r.getWidth() + 14;
-        if (r.getHeight() > ideal) r = r.withSizeKeepingCentre (r.getWidth(), ideal);
-        label.setBounds (r.removeFromTop (15));
+        const int knob = juce::jmax (18, juce::jmin (maxKnob, r.getWidth() - 4, r.getHeight() - 32));
+        r = r.withSizeKeepingCentre (r.getWidth(), knob + 31);
+        label.setBounds (r.removeFromTop (14));
         slider.setBounds (r);
     }
 
+    int maxKnob = 42;
     juce::Slider slider;
 
 private:
@@ -271,20 +311,27 @@ public:
         auto r = getLocalBounds().toFloat().reduced (1.0f);
         const bool on = getToggleState();
         const float alpha = isEnabled() ? 1.0f : 0.35f;
-        g.setColour ((on ? colour.withAlpha (0.85f) : (down ? track.brighter (0.25f) : over ? track.brighter (0.12f) : track)).withMultipliedAlpha (alpha));
+        const auto col = Neural::hot (colour, 0.0f);
+        g.setColour ((on ? col.withAlpha (0.85f) : (down ? track.brighter (0.25f) : over ? track.brighter (0.12f) : track)).withMultipliedAlpha (alpha));
         g.fillRoundedRectangle (r, 6.0f);
         if (filled && ! on)
         {
-            g.setColour (colour.withAlpha (0.35f * alpha));
+            g.setColour (col.withAlpha (0.35f * alpha));
             g.fillRoundedRectangle (r, 6.0f);
         }
-        g.setColour ((on ? colour : panelEdge.brighter (over ? 0.4f : 0.1f)).withMultipliedAlpha (alpha));
+        g.setColour ((on ? col : panelEdge.brighter (over ? 0.4f : 0.1f)).withMultipliedAlpha (alpha));
         g.drawRoundedRectangle (r.reduced (0.5f), 6.0f, 1.0f);
 
         const auto ink = (on || filled ? juce::Colours::white : NebulaColours::text).withMultipliedAlpha (alpha);
         const auto caption = getButtonText();
         if (caption.isEmpty())
             Icons::draw (g, icon, r.reduced (r.getHeight() * 0.2f), ink, 1.7f);
+        else if (icon.isEmpty())
+        {
+            g.setColour (ink);
+            g.setFont (juce::FontOptions (12.5f));
+            g.drawText (caption, r.reduced (6.0f, 0.0f), juce::Justification::centredLeft);
+        }
         else if (horizontal)
         {
             auto iconArea = r.removeFromLeft (r.getHeight()).reduced (r.getHeight() * 0.2f);
@@ -355,19 +402,28 @@ inline void drawSection (juce::Graphics& g, juce::Rectangle<int> area, const juc
 {
     using namespace NebulaColours;
     const auto r = area.toFloat();
-    g.setColour (panel);
+    const float cr = Neural::level();
+    g.setColour (panel.withAlpha (0.94f));
     g.fillRoundedRectangle (r, 8.0f);
-    g.setColour (panelEdge);
+    // Borde que "brilla" más entre más loco está el sonido
+    const auto edge = Neural::hot (panelEdge.brighter (0.15f), cr * 0.3f);
+    if (cr > 0.05f)
+    {
+        g.setColour (Neural::hot (accentColour).withAlpha (0.12f + 0.25f * cr));
+        g.drawRoundedRectangle (r.expanded (1.5f), 9.0f, 2.0f + 2.0f * cr);
+    }
+    g.setColour (edge);
     g.drawRoundedRectangle (r.reduced (0.5f), 8.0f, 1.0f);
     float x = r.getX() + 10.0f;
+    const auto ac = Neural::hot (accentColour, 0.0f);
     if (icon != nullptr)
     {
-        Icons::draw (g, *icon, { x, r.getY() + 7.0f, 16.0f, 16.0f }, accentColour, 1.5f);
+        Icons::draw (g, *icon, { x, r.getY() + 7.0f, 16.0f, 16.0f }, ac, 1.5f);
         x += 21.0f;
     }
     else
     {
-        g.setColour (accentColour);
+        g.setColour (ac);
         g.fillRoundedRectangle (x, r.getY() + 10.0f, 3.0f, 11.0f, 1.5f);
         x += 9.0f;
     }

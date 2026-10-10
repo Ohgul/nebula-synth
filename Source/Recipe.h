@@ -166,9 +166,18 @@ namespace Recipe
         auto i = [&] (const char* id) { return juce::roundToInt (v (id)); };
         juce::String t;
         t << "## Como esta hecho en Nebula\n";
-        const bool sampler = i (ParamID::engine) == 1;
+        const bool sampler = i (ParamID::engine) == Engine::Sample;
+        const bool resynth = i (ParamID::engine) == Engine::Resynth;
         int step = 1;
-        if (sampler)
+        if (resynth)
+        {
+            t << step++ << ". Motor Resintesis: el sonido se reconstruye con una tabla de armonicos que cambia en el tiempo, parciales sueltos y ruido por bandas, todo sacado del audio original.\n";
+            if (std::abs (v (ParamID::rsSpeed) - 1.0f) > 0.02f) t << step++ << ". Velocidad del tiempo x" << juce::String (v (ParamID::rsSpeed), 2) << ".\n";
+            if (std::abs (v (ParamID::rsTone)) > 0.02f) t << step++ << ". Tono " << (v (ParamID::rsTone) > 0 ? "mas brillante" : "mas oscuro") << " (" << pct (std::abs (v (ParamID::rsTone))) << ").\n";
+            if (std::abs (v (ParamID::rsStretch)) > 0.02f) t << step++ << ". Parciales estirados " << pct (v (ParamID::rsStretch)) << ".\n";
+        }
+        if (resynth) {}
+        else if (sampler)
         {
             t << step++ << ". Motor Sample: toca tu audio";
             if (i (ParamID::smpPlayMode) == 1) t << " en modo Tempo (" << beatNames()[i (ParamID::smpBeats)] << ")";

@@ -52,8 +52,19 @@ NebKnob& EditView::knob (const char* id, const char* name, const char* tip)
 
 EditView::EditView (NebulaAudioProcessor& p)
     : proc (p),
-      engine (p.state, ParamID::engine, [] (int i) { return i == 0 ? Icons::engineSynth() : Icons::engineSample(); },
-              { "Sinte: osciladores", "Sample: toca un audio" }, { "Sinte", "Sample" }),
+      engine (p.state, ParamID::engine, [] (int i) { return i == 0 ? Icons::engineSynth() : i == 1 ? Icons::engineSample() : Icons::wand(); },
+              { "Sinte: osciladores clasicos", "Sample: toca tu audio tal cual", "Resintesis: tu audio reconstruido por el sinte (lo crea RECREAR)" },
+              { "Sinte", "Sample", "Resintesis" }),
+      rsPitch (p.state, ParamID::rsPitch, "Curva de tono", Icons::note(), "Sigue la curva de tono del original (vibrato, glides, melodia)"),
+      osc1Power (p.state, ParamID::osc1On, "", Icons::power(), "Encender / apagar el oscilador 1"),
+      osc2Power (p.state, ParamID::osc2On, "", Icons::power(), "Encender / apagar el oscilador 2"),
+      subPower (p.state, ParamID::subOn, "", Icons::power(), "Encender / apagar el sub"),
+      noisePower (p.state, ParamID::noiseOn, "", Icons::power(), "Encender / apagar el ruido"),
+      uniPower (p.state, ParamID::uniOn, "", Icons::power(), "Encender / apagar el unisono"),
+      f1Power (p.state, ParamID::f1On, "", Icons::power(), "Encender / apagar el filtro 1 (apagado: el sonido pasa directo)"),
+      grainsPower (p.state, ParamID::grainsOn, "", Icons::power(), "Encender / apagar los granos"),
+      mpeToggle (p.state, ParamID::mpeOn, "MPE", Icons::piano(), "MPE: cada nota con su propio pitch bend, presion y timbre (Push 3, Seaboard, Linnstrument)"),
+      quality (p.state, ParamID::quality, "Calidad", "Oversampling: Alta y Ultra quitan el aliasing en notas agudas (usan mas CPU)"),
       wave1 (p.state, ParamID::osc1Wave, [] (int i) { return Icons::wave (i); }, waveTips),
       wave2 (p.state, ParamID::osc2Wave, [] (int i) { return Icons::wave (i); }, waveTips),
       preview1 (p, ParamID::osc1Wave, ParamID::osc1Shape, ParamID::osc1Table),
@@ -87,8 +98,21 @@ EditView::EditView (NebulaAudioProcessor& p)
     for (auto* c : std::initializer_list<juce::Component*> { &engine, &wave1, &wave2, &preview1, &preview2, &table1, &table2, &draw1, &audio1, &audio2,
                                                              &regionMini, &editRegion, &reverse, &loop, &playMode, &beats,
                                                              &grainType, &cleanButton, &filterGraph, &f1Type, &f1Slope, &f1Char, &f2Type, &f2Slope, &f2Char, &routing, &f2On,
-                                                             &ampGraph, &polyMode })
+                                                             &ampGraph, &polyMode, &rsPitch, &rsRecreate,
+                                                             &osc1Power, &osc2Power, &subPower, &noisePower, &uniPower, &f1Power, &grainsPower, &mpeToggle, &quality })
         addAndMakeVisible (c);
+    for (auto* t : { &osc1Power, &osc2Power, &subPower, &noisePower, &uniPower, &f1Power, &grainsPower }) t->colour = accent2;
+    rsRecreate.horizontal = true;
+    rsRecreate.colour = accent; rsRecreate.filled = true;
+    rsRecreate.onClick = [this] { proc.recreateFromSample(); };
+    rsSpeed    = &knob (ParamID::rsSpeed, "Velocidad", "Mas rapido o mas lento en el tiempo, sin cambiar el tono");
+    rsHarm     = &knob (ParamID::rsHarm, "Armonicos", "Volumen de la parte con nota");
+    rsPartials = &knob (ParamID::rsPartials, "Parciales", "Volumen de los parciales sueltos (campanas, metales, golpes)");
+    rsNoise    = &knob (ParamID::rsNoise, "Ruido", "Volumen de la parte de ruido (aire, golpe, roce)");
+    rsTone     = &knob (ParamID::rsTone, "Tono", "Mas oscuro o mas brillante");
+    rsStretch  = &knob (ParamID::rsStretch, "Estirar", "Estira los parciales: suena mas metalico o mas suave");
+    rsWidth    = &knob (ParamID::rsWidth, "Ancho", "Ancho estereo de lo recreado");
+    analogKnob = &knob (ParamID::analog, "Deriva", "Deriva analogica: cada nota un poco distinta, como un sinte de verdad");
 
     f2Type.colour = f2Slope.colour = f2Char.colour = warm;
     f2On.colour = warm;
@@ -231,15 +255,19 @@ void EditView::paintOverChildren (juce::Graphics& g)
 void EditView::updateVisibility()
 {
     const bool s = samplerEngine();
-    for (auto* c : std::initializer_list<juce::Component*> { &wave1, &wave2, &preview1, &preview2, shape1, oct1, shape2, semi2, fine2 })
-        c->setVisible (! s);
+    const bool rsx = resynthEngine();
+    for (auto* c : std::initializer_list<juce::Component*> { &wave1, &wave2, &preview1, &preview2, shape1, oct1, shape2, semi2, fine2, &osc1Power, &osc2Power })
+        c->setVisible (! s && ! rsx);
+    for (auto* c : std::initializer_list<juce::Component*> { rsSpeed, rsHarm, rsPartials, rsNoise, rsTone, rsStretch, rsWidth, &rsPitch, &rsRecreate })
+        c->setVisible (rsx);
+    rsRecreate.setEnabled (proc.sampleSource.get() != nullptr);
     for (auto* c : std::initializer_list<juce::Component*> { &regionMini, &editRegion, &reverse, &loop, &playMode, smpStart, smpTune, smpTexture, smpGrain,
-                                                             smpGrainAmt, &grainType, &cleanButton })
+                                                             smpGrainAmt, &grainType, &cleanButton, &grainsPower })
         c->setVisible (s);
     beats.setVisible (s && getParamValue (proc.state, ParamID::smpPlayMode) > 0.5f);
 
-    const bool wt1 = ! s && juce::roundToInt (getParamValue (proc.state, ParamID::osc1Wave)) == Wave::Table;
-    const bool wt2 = ! s && juce::roundToInt (getParamValue (proc.state, ParamID::osc2Wave)) == Wave::Table;
+    const bool wt1 = ! s && ! rsx && juce::roundToInt (getParamValue (proc.state, ParamID::osc1Wave)) == Wave::Table;
+    const bool wt2 = ! s && ! rsx && juce::roundToInt (getParamValue (proc.state, ParamID::osc2Wave)) == Wave::Table;
     table1.setVisible (wt1);
     table2.setVisible (wt2);
     draw1.setVisible (wt1);
@@ -250,7 +278,17 @@ void EditView::updateVisibility()
     for (auto* c : std::initializer_list<juce::Component*> { &f2Type, &f2Slope, &f2Char, &routing, cut2, res2, env2 })
         c->setAlpha (f2 ? 1.0f : 0.35f);
 
-    const int sig = (s ? 1 : 0) | (wt1 ? 2 : 0) | (wt2 ? 4 : 0);
+    // Atenuado cuando su sección está apagada
+    auto dim = [this] (const char* id, std::initializer_list<juce::Component*> cs) { const bool on = getParamValue (proc.state, id) > 0.5f; for (auto* c : cs) c->setAlpha (on ? 1.0f : 0.35f); };
+    dim (ParamID::osc1On, { &wave1, &preview1, shape1, oct1, &table1 });
+    dim (ParamID::osc2On, { &wave2, &preview2, shape2, semi2, fine2, &table2 });
+    dim (ParamID::subOn, { sub });
+    dim (ParamID::noiseOn, { noise, noiseCol });
+    dim (ParamID::uniOn, { uniV, uniD, uniW });
+    dim (ParamID::f1On, { &f1Type, &f1Slope, &f1Char, cut1, res1, env1 });
+    dim (ParamID::grainsOn, { smpGrainAmt, &grainType });
+
+    const int sig = (s ? 1 : 0) | (wt1 ? 2 : 0) | (wt2 ? 4 : 0) | (rsx ? 8 : 0);
     if (sig != layoutSig) { layoutSig = sig; resized(); }
 }
 
@@ -258,6 +296,7 @@ void EditView::timerCallback()
 {
     updateVisibility();
     if (samplerEngine() != lastSampler) { lastSampler = samplerEngine(); repaint(); }
+    if (resynthEngine() != lastResynth) { lastResynth = resynthEngine(); repaint(); }
     if (dropMessage.isNotEmpty() && juce::Time::getMillisecondCounterHiRes() - dropMessageTime > 5000.0) { dropMessage.clear(); repaint(); }
 }
 
@@ -265,7 +304,20 @@ void EditView::paint (juce::Graphics& g)
 {
     auto iconSaw = Icons::saw(), iconSample = Icons::waveform(), iconMix = Icons::sliders(), iconUni = Icons::superSaw(),
          iconFilter = Icons::filterShape (0), iconEnv = Icons::envelope(), iconVoice = Icons::piano();
-    if (samplerEngine())
+    if (resynthEngine())
+    {
+        auto iconRs = Icons::wand();
+        drawSection (g, rSample, "RESINTESIS", &iconRs);
+        auto m = proc.resynthModel();
+        g.setColour (textDim);
+        g.setFont (juce::FontOptions (11.5f));
+        juce::String info = m == nullptr ? juce::String ("Aun no hay nada recreado: carga un audio en el Cerebro y dale RECREAR.")
+                          : "\"" + m->name + "\":  " + (m->harmonic != nullptr ? juce::String ("armonicos") : juce::String ("sin nota fija"))
+                            + (m->partials.empty() ? juce::String() : ",  " + juce::String ((int) m->partials.size()) + " parciales")
+                            + (m->noise.empty() ? juce::String() : ",  ruido por bandas") + ".  En C suena C.";
+        g.drawFittedText (info, rResynth, juce::Justification::centredLeft, 1);
+    }
+    else if (samplerEngine())
         drawSection (g, rSample, "SAMPLE", &iconSample);
     else
     {
@@ -287,7 +339,7 @@ void EditView::paint (juce::Graphics& g)
         g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
         g.drawText (t, r, juce::Justification::centred);
     };
-    badge (f1Type.getBounds().withWidth (18).withHeight (18).translated (-24, 6), "1", accent2);
+    juce::ignoreUnused (badge);
     if (samplerEngine())
     {
         g.setColour (textDim);
@@ -312,7 +364,7 @@ void EditView::resized()
     constexpr int gap = 10;
 
     // ---- Fila 1 ----
-    auto row1 = r.removeFromTop (272);
+    auto row1 = r.removeFromTop (250);
     r.removeFromTop (gap);
     auto left = row1.removeFromLeft (610);
     rEngine = left.removeFromTop (34);
@@ -322,6 +374,19 @@ void EditView::resized()
     left.removeFromLeft (gap);
     rOsc2 = left;
     rSample = rOsc1.getUnion (rOsc2);
+    osc1Power.setBounds (rOsc1.getRight() - 38, rOsc1.getY() + 5, 28, 22);
+    osc2Power.setBounds (rOsc2.getRight() - 38, rOsc2.getY() + 5, 28, 22);
+    {
+        auto a = rSample.reduced (12).withTrimmedTop (24);
+        rResynth = a.removeFromTop (20);
+        a.removeFromTop (6);
+        auto bottom = a.removeFromBottom (34);
+        rsPitch.setBounds (bottom.removeFromLeft (150).reduced (0, 1));
+        bottom.removeFromLeft (10);
+        rsRecreate.setBounds (bottom.removeFromLeft (170).reduced (0, 1));
+        const int w = a.getWidth() / 7;
+        for (auto* k : { rsSpeed, rsHarm, rsPartials, rsNoise, rsTone, rsStretch, rsWidth }) { k->maxKnob = 46; k->setBounds (a.removeFromLeft (w)); }
+    }
 
     auto layoutOsc = [] (juce::Rectangle<int> area, IconChoice& wave, WavePreview& prev, ParamCombo& table, std::vector<NebKnob*> ks, IconButton* draw, IconButton* audio)
     {
@@ -355,6 +420,7 @@ void EditView::resized()
         cleanButton.setBounds (btns);
         leftCol.removeFromTop (20);
         grainType.setBounds (leftCol.removeFromTop (30));
+        grainsPower.setBounds (grainType.getRight() - 26, grainType.getY() - 20, 26, 18);
         a.removeFromLeft (12);
         auto top = a.removeFromTop (48);
         playMode.setBounds (top.removeFromLeft (140));
@@ -371,12 +437,16 @@ void EditView::resized()
     rMix = row1.removeFromLeft (row1.getWidth() / 2 - gap / 2);
     row1.removeFromLeft (gap);
     rUni = row1;
+    uniPower.setBounds (rUni.getRight() - 38, rUni.getY() + 5, 28, 22);
     {
         auto a = rMix.reduced (8).withTrimmedTop (24);
         auto top = a.removeFromTop (a.getHeight() / 2), bottom = a;
         mix->setBounds (top.removeFromLeft (top.getWidth() / 2)); sub->setBounds (top);
         const int w3 = bottom.getWidth() / 3;
         fm->setBounds (bottom.removeFromLeft (w3)); noise->setBounds (bottom.removeFromLeft (w3)); noiseCol->setBounds (bottom);
+        // Encendidos pequeños junto al nombre de Sub y Ruido
+        subPower.setBounds (sub->getBounds().getCentreX() + 18, sub->getY() - 2, 22, 18);
+        noisePower.setBounds (noise->getBounds().getCentreX() + 18, noise->getY() - 2, 22, 18);
     }
     {
         auto a = rUni.reduced (8).withTrimmedTop (24);
@@ -412,7 +482,7 @@ void EditView::resized()
             return rowArea;
         };
         const int rowH = a.getHeight() / 2;
-        row (a.removeFromTop (rowH), f1Type, f1Slope, f1Char, { cut1, res1, env1, drive }, nullptr);
+        row (a.removeFromTop (rowH), f1Type, f1Slope, f1Char, { cut1, res1, env1, drive }, &f1Power);
         auto rest = row (a, f2Type, f2Slope, f2Char, { cut2, res2, env2 }, &f2On);
         routing.setBounds (rest.withSizeKeepingCentre (juce::jmin (rest.getWidth() - 4, 76), 32).translated (0, 6));
     }
@@ -427,13 +497,16 @@ void EditView::resized()
 
     {
         auto a = rVoice.reduced (10).withTrimmedTop (22);
-        polyMode.setBounds (a.removeFromTop (46));
-        a.removeFromTop (6);
-        const int rowH = a.getHeight() / 3;
-        auto r1 = a.removeFromTop (rowH), r2 = a.removeFromTop (rowH), r3 = a;
-        voices->setBounds (r1.removeFromLeft (r1.getWidth() / 2)); glide->setBounds (r1);
-        bend->setBounds (r2.removeFromLeft (r2.getWidth() / 2)); vel->setBounds (r2);
-        volume->setBounds (r3.withSizeKeepingCentre (r3.getWidth() / 2, r3.getHeight()));
+        polyMode.setBounds (a.removeFromTop (44));
+        a.removeFromTop (4);
+        auto bottom = a.removeFromBottom (40);
+        quality.setBounds (bottom.removeFromLeft (bottom.getWidth() * 6 / 10).reduced (2, 0));
+        mpeToggle.setBounds (bottom.reduced (2, 6));
+        const int rowH = a.getHeight() / 2;
+        auto r1 = a.removeFromTop (rowH), r2 = a;
+        const int w = r1.getWidth() / 3;
+        voices->setBounds (r1.removeFromLeft (w)); glide->setBounds (r1.removeFromLeft (w)); bend->setBounds (r1);
+        vel->setBounds (r2.removeFromLeft (w)); analogKnob->setBounds (r2.removeFromLeft (w)); volume->setBounds (r2);
     }
 }
 

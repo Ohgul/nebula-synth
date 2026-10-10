@@ -17,6 +17,8 @@ public:
 
     void animate();                    // se llama ~30 veces por segundo
     std::function<void()> onSelect;    // para escuchar el sonido elegido
+    bool crossMode = false;            // el próximo clic en una neurona la cruza con la elegida
+    std::function<void()> onCrossed;
 
 private:
     static constexpr int seedIndex = -1, none = -2, profileSize = 96;
@@ -33,6 +35,8 @@ private:
     Blob target (const Genome&) const;
     static void approach (Blob& cur, const Blob& tgt, float k);
     void drawBlob (juce::Graphics&, juce::Point<float> c, float r, const Blob&, bool selected, bool hover, float phase, float glowBoost) const;
+    void drawBrain (juce::Graphics&, juce::Point<float> c, float r, const Blob&, bool selected, bool hover, float phase) const;
+    void drawDendrites (juce::Graphics&, juce::Point<float> c, float r, const Blob&, int seed, float phase) const;
 
     juce::Point<float> sproutPos (int k) const;
     float sproutRadius() const { return seedRadius * 0.55f; }
@@ -75,18 +79,15 @@ private:
     NebulaAudioProcessor& processor;
     RegionView region;
     IconButton loadButton    { "", Icons::folder(), "Cargar otro audio" },
-               recreateButton { "Recrear sonido", Icons::wand(), "Resintesis: Nebula analiza la seccion y la reconstruye con sus osciladores (nota exacta, timbre, ruido y envolventes)" },
-               imitateButton { "Imitar con osciladores", Icons::sliders(), "Busca el patch de ondas clasicas (sierra, pulso, filtro...) que mas se parece" },
-               useButton     { "Usar el sample", Icons::waveform(), "Toca el audio como instrumento; los brotes lo transforman" },
-               waveButton    { "Hacer onda", Icons::cycle(), "Convierte la seccion en una tabla de ondas para el oscilador 1" },
-               editButton    { "Seccion", Icons::scissors(), "Elige que parte del audio se usa (zoom, inicio y fin)" },
-               cleanButton   { "Limpiar", Icons::broom(), "Separa la parte del audio que quieres rescatar (nota, golpes, sin ruido...)" },
-               recipeButton  { "Ver la receta", Icons::recipe(), "Como es este sonido y como esta hecho, paso a paso" },
-               cancelButton  { "Cancelar", Icons::stop(), "Detener la busqueda" };
+               recreateButton { "RECREAR", Icons::wand(), "Nebula analiza la seccion y la reconstruye con su sinte: nota exacta, timbre, ruido y envolvente" },
+               editButton    { "Seccion", Icons::scissors(), "Elige que parte del audio se usa" },
+               cleanButton   { "Limpiar", Icons::broom(), "Rescata solo la parte que quieres (nota, golpes, sin ruido...)" },
+               recipeButton  { "Como se hizo?", Icons::recipe(), "La receta: que es el sonido y como lo reconstruyo Nebula" },
+               cancelButton  { "Cancelar", Icons::stop(), "Detener" };
     std::unique_ptr<juce::FileChooser> chooser;
     std::shared_ptr<const SampleData> shown;
     juce::String message;
-    bool dragHover = false;
+    bool dragHover = false, recreated = false;
     int seenImitations = 0;
 };
 
@@ -122,14 +123,15 @@ private:
     bool dragHover = false;
     int auditionNoteOn = 60;
 
-    juce::Slider mutationSlider;
-    IconButton germinateButton { "Germinar", Icons::sprout(), "Crea 8 variaciones a partir del sonido que suena ahora" },
-               rerollButton    { "Otra tanda", Icons::dice(), "Nuevas variaciones de la misma semilla" },
+    juce::Slider mutationSlider, morphSlider;
+    IconButton crossButton { "Cruzar", Icons::sparkle(), "Elige una neurona, presiona Cruzar y luego toca otra: nace una mezcla de las dos" };
+    IconButton germinateButton { "Evolucionar", Icons::sprout(), "Nacen 8 neuronas nuevas (variaciones) a partir del sonido que suena ahora" },
+               rerollButton    { "Otra tanda", Icons::dice(), "Otras 8 variaciones del mismo sonido" },
                randomButton    { "Al azar", Icons::sparkle(), "Empieza desde un sonido aleatorio" },
                backButton      { "Atras", Icons::back(), "Regresa a la generacion anterior" },
                lockEnvButton   { "Fijar env", Icons::lock(), "Las mutaciones no cambian la envolvente de volumen" },
                lockFilterButton { "Fijar filtro", Icons::filterShape (0), "Las mutaciones no cambian los filtros (el sonido conserva su caracter)" },
-               listenButton    { "Escuchar", Icons::speaker(), "Suena cada vez que eliges un brote" };
+               listenButton    { "Escuchar", Icons::speaker(), "Suena cada vez que eliges una neurona" };
 
     int lastVersion = -1;
     double noteOffTime = 0.0;

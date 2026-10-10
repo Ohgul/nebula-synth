@@ -321,7 +321,7 @@ int main (int argc, char** argv)
     }
     {
         auto [res, c, sim] = recreateCase ("campana", makeBell (330.0, 2.0), 64);
-        check ("Recrear campana: pasa a imitacion (FM)", res == NebulaAudioProcessor::RecreateResult::Imitating && sim > 0.3f,
+        check ("Recrear campana (parciales inarmonicos)", res == NebulaAudioProcessor::RecreateResult::Resynthesized && sim > 0.6f,
                juce::String::formatted ("parecido %.0f%%", sim * 100));
     }
 

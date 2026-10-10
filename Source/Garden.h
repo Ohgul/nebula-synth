@@ -93,6 +93,32 @@ public:
         changed();
     }
 
+    // Mezcla continua entre el núcleo (t = 0) y la neurona elegida (t = 1)
+    void blend (int i, float t)
+    {
+        const juce::ScopedLock sl (lock);
+        if (! juce::isPositiveAndBelow (i, numSprouts)) return;
+        Genome g = seed;
+        const auto& s = sprouts[(size_t) i];
+        for (size_t k = 0; k < g.genes.size() && k < s.genes.size(); ++k) g.genes[k] += (s.genes[k] - g.genes[k]) * t;
+        apply (g);
+    }
+
+    // Cruza dos neuronas: el hijo pasa a ser el núcleo y nacen nuevas variaciones
+    void cross (int a, int b)
+    {
+        if (! juce::isPositiveAndBelow (a, numSprouts) || ! juce::isPositiveAndBelow (b, numSprouts)) return;
+        Genome child;
+        {
+            const juce::ScopedLock sl (lock);
+            child = ops.crossover (sprouts[(size_t) a], sprouts[(size_t) b]);
+            ops.sanitize (child);
+        }
+        plantGenome (child);
+    }
+
+    int historySize() const { return (int) history.size(); }
+
     void plant (int i)
     {
         if (! juce::isPositiveAndBelow (i, numSprouts)) return;
@@ -104,7 +130,7 @@ public:
         Genome g;
         {
             const juce::ScopedLock sl (lock);
-            if (ops.isSamplerGenome (capture()))
+            if (ops.engineOf (capture()) != Engine::Synth)
             {
                 // Con sample: se conservan el sample y el motor, todo lo demás al azar
                 g = capture();

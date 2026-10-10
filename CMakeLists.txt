@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.22)
 set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "")
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "")
 
-project(NebulaSynth VERSION 2.1.0)
+project(NebulaSynth VERSION 3.0.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -65,7 +65,7 @@ target_link_libraries(NebulaSynth
 # ---- Prueba opcional (renderiza audio a WAV sin abrir un DAW) ----
 option(NEBULA_BUILD_TESTS "Compilar las pruebas sin DAW" OFF)
 if(NEBULA_BUILD_TESTS)
-    foreach(t Render Imitate V2 V21 Ui)
+    foreach(t Render Imitate V2 V21 V3 Ui)
         juce_add_console_app(Nebula${t}Test PRODUCT_NAME "Nebula${t}Test")
         target_sources(Nebula${t}Test PRIVATE ${NEBULA_SOURCES} tests/${t}Test.cpp)
         target_compile_definitions(Nebula${t}Test PRIVATE

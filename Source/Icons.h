@@ -229,6 +229,21 @@ namespace Icons
         Path p; p.startNewSubPath (0.15f, 0.85f); p.lineTo (0.2f, 0.65f); p.lineTo (0.7f, 0.15f); p.lineTo (0.85f, 0.3f); p.lineTo (0.35f, 0.8f); p.closeSubPath();
         p.startNewSubPath (0.6f, 0.25f); p.lineTo (0.75f, 0.4f); return p;
     }
+    inline Path undo()
+    {
+        Path p; p.startNewSubPath (0.3f, 0.3f); p.lineTo (0.62f, 0.3f); p.quadraticTo (0.88f, 0.3f, 0.88f, 0.55f); p.quadraticTo (0.88f, 0.8f, 0.62f, 0.8f); p.lineTo (0.35f, 0.8f);
+        p.startNewSubPath (0.42f, 0.15f); p.lineTo (0.25f, 0.3f); p.lineTo (0.42f, 0.45f); return p;
+    }
+    inline Path redo()
+    {
+        Path p = undo(); p.applyTransform (juce::AffineTransform::scale (-1.0f, 1.0f, 0.5f, 0.5f)); return p;
+    }
+    inline Path chevronLeft()  { Path p; p.startNewSubPath (0.62f, 0.2f); p.lineTo (0.35f, 0.5f); p.lineTo (0.62f, 0.8f); return p; }
+    inline Path chevronRight() { Path p; p.startNewSubPath (0.38f, 0.2f); p.lineTo (0.65f, 0.5f); p.lineTo (0.38f, 0.8f); return p; }
+    inline Path list()
+    {
+        Path p; for (int k = 0; k < 3; ++k) { const float y = 0.28f + 0.22f * k; p.addEllipse (0.14f, y - 0.04f, 0.08f, 0.08f); p.startNewSubPath (0.32f, y); p.lineTo (0.86f, y); } return p;
+    }
     inline Path power()
     {
         Path p; p.addCentredArc (0.5f, 0.55f, 0.32f, 0.32f, 0.0f, 0.65f, juce::MathConstants<float>::twoPi - 0.65f, true);

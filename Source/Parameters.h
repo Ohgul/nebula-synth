@@ -111,6 +111,65 @@ namespace ParamID
     inline constexpr const char* smpGrainType = "smpGrainType";
 
     inline constexpr const char* master = "master";
+
+    // ---- v3: encendido / apagado por sección ----
+    inline constexpr const char* osc1On  = "osc1On";
+    inline constexpr const char* osc2On  = "osc2On";
+    inline constexpr const char* subOn   = "subOn";
+    inline constexpr const char* noiseOn = "noiseOn";
+    inline constexpr const char* uniOn   = "uniOn";
+    inline constexpr const char* f1On    = "f1On";
+    inline constexpr const char* driveOn = "driveOn";
+    inline constexpr const char* grainsOn = "grainsOn";
+    inline constexpr const char* analog  = "analog";      // deriva analógica
+
+    // ---- v3: motor de resíntesis ----
+    inline constexpr const char* rsSpeed    = "rsSpeed";
+    inline constexpr const char* rsHarm     = "rsHarm";
+    inline constexpr const char* rsPartials = "rsPartials";
+    inline constexpr const char* rsNoise    = "rsNoise";
+    inline constexpr const char* rsTone     = "rsTone";
+    inline constexpr const char* rsStretch  = "rsStretch";
+    inline constexpr const char* rsPitch    = "rsPitch";   // sigue la curva de tono del original
+    inline constexpr const char* rsWidth    = "rsWidth";
+
+    // ---- v3: macros ----
+    inline constexpr const char* macroBright = "macroBright";
+    inline constexpr const char* macroBody   = "macroBody";
+    inline constexpr const char* macroMove   = "macroMove";
+    inline constexpr const char* macroSpace  = "macroSpace";
+    inline constexpr const char* macroChaos  = "macroChaos";
+
+    // ---- v3: efectos ----
+    inline constexpr const char* fxEqOn      = "fxEqOn";
+    inline constexpr const char* fxEqLow     = "fxEqLow";
+    inline constexpr const char* fxEqMid     = "fxEqMid";
+    inline constexpr const char* fxEqMidFreq = "fxEqMidFreq";
+    inline constexpr const char* fxEqHigh    = "fxEqHigh";
+    inline constexpr const char* fxCompOn    = "fxCompOn";
+    inline constexpr const char* fxCompAmt   = "fxCompAmt";
+    inline constexpr const char* fxChorusOn    = "fxChorusOn";
+    inline constexpr const char* fxChorusRate  = "fxChorusRate";
+    inline constexpr const char* fxChorusDepth = "fxChorusDepth";
+    inline constexpr const char* fxChorusMix   = "fxChorusMix";
+    inline constexpr const char* fxDelayOn   = "fxDelayOn";
+    inline constexpr const char* fxDelaySync = "fxDelaySync";
+    inline constexpr const char* fxDelayMs   = "fxDelayMs";
+    inline constexpr const char* fxDelayFb   = "fxDelayFb";
+    inline constexpr const char* fxDelayMix  = "fxDelayMix";
+    inline constexpr const char* fxDelayPing = "fxDelayPing";
+    inline constexpr const char* fxDelayTone = "fxDelayTone";
+    inline constexpr const char* fxRevOn     = "fxRevOn";
+    inline constexpr const char* fxRevSize   = "fxRevSize";
+    inline constexpr const char* fxRevDecay  = "fxRevDecay";
+    inline constexpr const char* fxRevDamp   = "fxRevDamp";
+    inline constexpr const char* fxRevPre    = "fxRevPre";
+    inline constexpr const char* fxRevMix    = "fxRevMix";
+    inline constexpr const char* fxWidth     = "fxWidth";
+
+    // ---- v3: interpretación (no se guardan en el genoma) ----
+    inline constexpr const char* quality = "quality";
+    inline constexpr const char* mpeOn   = "mpeOn";
 }
 
 // ---------------------------------------------------------------------------
@@ -143,7 +202,11 @@ inline const juce::StringArray& lfoShapeNames() { static const juce::StringArray
 inline const juce::StringArray& polyNames()     { static const juce::StringArray n { "Poli", "Mono", "Legato" }; return n; }
 namespace GrainType { enum { Smooth, Sharp, Scatter, Reverse, Octave, count }; }
 inline const juce::StringArray& grainTypeNames() { static const juce::StringArray n { "Suave", "Nitido", "Disperso", "Reversa", "Octava" }; return n; }
-inline const juce::StringArray& engineNames()   { static const juce::StringArray n { "Sinte", "Sample" }; return n; }
+inline const juce::StringArray& engineNames()   { static const juce::StringArray n { "Sinte", "Sample", "Resintesis" }; return n; }
+namespace Engine { enum { Synth, Sample, Resynth }; }
+inline const juce::StringArray& qualityNames()  { static const juce::StringArray n { "Normal", "Alta (2x)", "Ultra (4x)" }; return n; }
+inline const juce::StringArray& delaySyncNames() { static const juce::StringArray n { "Libre (ms)", "1/16", "1/8T", "1/8", "1/8.", "1/4T", "1/4", "1/4.", "1/2", "1 compas" }; return n; }
+inline double delaySyncBeats (int i) { static const double b[] { 0.0, 0.25, 1.0 / 3.0, 0.5, 0.75, 2.0 / 3.0, 1.0, 1.5, 2.0, 4.0 }; return b[juce::jlimit (0, 9, i)]; }
 inline const juce::StringArray& onOffNames()    { static const juce::StringArray n { "No", "Si" }; return n; }
 inline const juce::StringArray& playModeNames() { static const juce::StringArray n { "Clasico", "Tempo" }; return n; }
 inline const juce::StringArray& beatNames()     { static const juce::StringArray n { "Auto", "1/4", "1/2", "1 tiempo", "2 tiempos", "1 compas", "2 compases", "4 compases", "8 compases" }; return n; }
@@ -216,8 +279,11 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
     auto timeRange = [] (float max) { NormalisableRange<float> r (0.001f, max); r.setSkewForCentre (0.4f); return r; };
     auto unit = NormalisableRange<float> (0.0f, 1.0f);
     auto bip  = NormalisableRange<float> (-1.0f, 1.0f);
-    NormalisableRange<float> cutRange (20.0f, 20000.0f);
-    cutRange.setSkewForCentre (1000.0f);
+    // Corte en escala logarítmica de verdad: cada tramo de la perilla es la misma cantidad de octavas
+    NormalisableRange<float> cutRange (20.0f, 20000.0f,
+        [] (float a, float b, float x) { return a * std::pow (b / a, x); },
+        [] (float a, float b, float v) { return std::log (v / a) / std::log (b / a); },
+        [] (float a, float b, float v) { return juce::jlimit (a, b, v); });
     NormalisableRange<float> lfoRange (0.05f, 20.0f);
     lfoRange.setSkewForCentre (2.0f);
     auto pct = Attr().withStringFromValueFunction (ParamFormat::percent);
@@ -338,6 +404,67 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
     add (new F ({ ParamID::smpGrainAmt, 1 }, "Sample Granos Cantidad", unit, 0.0f, pct));
     add (new C ({ ParamID::smpGrainType, 1 }, "Sample Granos Tipo", grainTypeNames(), 0));
 
+    // ================== v3 ==================
+    add (new B ({ ParamID::osc1On, 1 }, "Osc 1 Encendido", true));
+    add (new B ({ ParamID::osc2On, 1 }, "Osc 2 Encendido", true));
+    add (new B ({ ParamID::subOn, 1 }, "Sub Encendido", true));
+    add (new B ({ ParamID::noiseOn, 1 }, "Ruido Encendido", true));
+    add (new B ({ ParamID::uniOn, 1 }, "Unisono Encendido", true));
+    add (new B ({ ParamID::f1On, 1 }, "Filtro 1 Encendido", true));
+    add (new B ({ ParamID::driveOn, 1 }, "Drive Encendido", true));
+    add (new B ({ ParamID::grainsOn, 1 }, "Granos Encendido", true));
+    add (new F ({ ParamID::analog, 1 }, "Deriva Analogica", unit, 0.0f, pct));
+
+    NormalisableRange<float> speedRange (0.25f, 4.0f); speedRange.setSkewForCentre (1.0f);
+    add (new F ({ ParamID::rsSpeed, 1 }, "Resintesis Velocidad", speedRange, 1.0f, Attr().withStringFromValueFunction (ParamFormat::times)));
+    add (new F ({ ParamID::rsHarm, 1 }, "Resintesis Armonicos", NormalisableRange<float> (0.0f, 1.5f), 1.0f, pct));
+    add (new F ({ ParamID::rsPartials, 1 }, "Resintesis Parciales", NormalisableRange<float> (0.0f, 1.5f), 1.0f, pct));
+    add (new F ({ ParamID::rsNoise, 1 }, "Resintesis Ruido", NormalisableRange<float> (0.0f, 2.0f), 1.0f, pct));
+    add (new F ({ ParamID::rsTone, 1 }, "Resintesis Tono", bip, 0.0f, Attr().withStringFromValueFunction (ParamFormat::bipolar)));
+    add (new F ({ ParamID::rsStretch, 1 }, "Resintesis Estirar", bip, 0.0f, Attr().withStringFromValueFunction (ParamFormat::bipolar)));
+    add (new B ({ ParamID::rsPitch, 1 }, "Resintesis Curva de Tono", true));
+    add (new F ({ ParamID::rsWidth, 1 }, "Resintesis Ancho", unit, 1.0f, pct));
+
+    add (new F ({ ParamID::macroBright, 1 }, "Macro Brillo", bip, 0.0f, Attr().withStringFromValueFunction (ParamFormat::bipolar)));
+    add (new F ({ ParamID::macroBody, 1 }, "Macro Cuerpo", bip, 0.0f, Attr().withStringFromValueFunction (ParamFormat::bipolar)));
+    add (new F ({ ParamID::macroMove, 1 }, "Macro Movimiento", unit, 0.0f, pct));
+    add (new F ({ ParamID::macroSpace, 1 }, "Macro Espacio", unit, 0.0f, pct));
+    add (new F ({ ParamID::macroChaos, 1 }, "Macro Locura", unit, 0.0f, pct));
+
+    auto db = Attr().withStringFromValueFunction ([] (float v, int) { return (v > 0 ? "+" : "") + juce::String (v, 1) + " dB"; });
+    NormalisableRange<float> midF (200.0f, 8000.0f); midF.setSkewForCentre (1200.0f);
+    add (new B ({ ParamID::fxEqOn, 1 }, "EQ Encendido", false));
+    add (new F ({ ParamID::fxEqLow, 1 }, "EQ Graves", NormalisableRange<float> (-12.0f, 12.0f), 0.0f, db));
+    add (new F ({ ParamID::fxEqMid, 1 }, "EQ Medios", NormalisableRange<float> (-12.0f, 12.0f), 0.0f, db));
+    add (new F ({ ParamID::fxEqMidFreq, 1 }, "EQ Frecuencia Medios", midF, 1200.0f, Attr().withStringFromValueFunction (ParamFormat::hertz)));
+    add (new F ({ ParamID::fxEqHigh, 1 }, "EQ Agudos", NormalisableRange<float> (-12.0f, 12.0f), 0.0f, db));
+    add (new B ({ ParamID::fxCompOn, 1 }, "Compresor Encendido", false));
+    add (new F ({ ParamID::fxCompAmt, 1 }, "Compresor Cantidad", unit, 0.4f, pct));
+    NormalisableRange<float> chRate (0.05f, 5.0f); chRate.setSkewForCentre (0.6f);
+    add (new B ({ ParamID::fxChorusOn, 1 }, "Chorus Encendido", false));
+    add (new F ({ ParamID::fxChorusRate, 1 }, "Chorus Velocidad", chRate, 0.6f, Attr().withStringFromValueFunction (ParamFormat::lfoHz)));
+    add (new F ({ ParamID::fxChorusDepth, 1 }, "Chorus Profundidad", unit, 0.4f, pct));
+    add (new F ({ ParamID::fxChorusMix, 1 }, "Chorus Mezcla", unit, 0.5f, pct));
+    NormalisableRange<float> dMs (10.0f, 1500.0f); dMs.setSkewForCentre (300.0f);
+    add (new B ({ ParamID::fxDelayOn, 1 }, "Delay Encendido", false));
+    add (new C ({ ParamID::fxDelaySync, 1 }, "Delay Tiempo", delaySyncNames(), 4));
+    add (new F ({ ParamID::fxDelayMs, 1 }, "Delay ms", dMs, 300.0f, Attr().withStringFromValueFunction ([] (float v, int) { return juce::String (juce::roundToInt (v)) + " ms"; })));
+    add (new F ({ ParamID::fxDelayFb, 1 }, "Delay Repeticiones", NormalisableRange<float> (0.0f, 0.95f), 0.35f, pct));
+    add (new F ({ ParamID::fxDelayMix, 1 }, "Delay Mezcla", unit, 0.25f, pct));
+    add (new B ({ ParamID::fxDelayPing, 1 }, "Delay Ping Pong", true));
+    add (new F ({ ParamID::fxDelayTone, 1 }, "Delay Tono", unit, 0.6f, pct));
+    NormalisableRange<float> decay (0.2f, 20.0f); decay.setSkewForCentre (2.5f);
+    add (new B ({ ParamID::fxRevOn, 1 }, "Reverb Encendido", false));
+    add (new F ({ ParamID::fxRevSize, 1 }, "Reverb Tamano", unit, 0.6f, pct));
+    add (new F ({ ParamID::fxRevDecay, 1 }, "Reverb Cola", decay, 2.5f, tAttr));
+    add (new F ({ ParamID::fxRevDamp, 1 }, "Reverb Brillo", unit, 0.55f, pct));
+    add (new F ({ ParamID::fxRevPre, 1 }, "Reverb Pre-delay", NormalisableRange<float> (0.0f, 0.2f), 0.02f, tAttr));
+    add (new F ({ ParamID::fxRevMix, 1 }, "Reverb Mezcla", unit, 0.25f, pct));
+    add (new F ({ ParamID::fxWidth, 1 }, "Ancho Estereo", NormalisableRange<float> (0.0f, 2.0f), 1.0f, pct));
+
+    add (new C ({ ParamID::quality, 1 }, "Calidad", qualityNames(), 0));
+    add (new B ({ ParamID::mpeOn, 1 }, "MPE", false));
+
     add (new F ({ ParamID::master, 1 }, "Volumen", NormalisableRange<float> (-60.0f, 6.0f), -6.0f, Attr().withStringFromValueFunction (ParamFormat::decibels)));
 
     return { p.begin(), p.end() };
@@ -361,6 +488,13 @@ namespace P
         modTime, modAmount, polyMode, voiceCount, glide, bendRange, velSens,
         engine, smpStart, smpTune, smpReverse, smpLoop, smpTexture, smpGrain, smpPlayMode, smpBeats,
         lfoOn, lfo2On, smpGrainAmt, smpGrainType, noiseColor,
+        osc1On, osc2On, subOn, noiseOn, uniOn, f1On, driveOn, grainsOn, analog,
+        rsSpeed, rsHarm, rsPartials, rsNoise, rsTone, rsStretch, rsPitch, rsWidth,
+        macroBright, macroBody, macroMove, macroSpace, macroChaos,
+        fxEqOn, fxEqLow, fxEqMid, fxEqMidFreq, fxEqHigh, fxCompOn, fxCompAmt,
+        fxChorusOn, fxChorusRate, fxChorusDepth, fxChorusMix,
+        fxDelayOn, fxDelaySync, fxDelayMs, fxDelayFb, fxDelayMix, fxDelayPing, fxDelayTone,
+        fxRevOn, fxRevSize, fxRevDecay, fxRevDamp, fxRevPre, fxRevMix, fxWidth, quality, mpeOn, master,
         count
     };
 
@@ -380,7 +514,15 @@ namespace P
             ParamID::modTime, ParamID::modAmount, ParamID::polyMode, ParamID::voiceCount, ParamID::glide, ParamID::bendRange, ParamID::velSens,
             ParamID::engine, ParamID::smpStart, ParamID::smpTune, ParamID::smpReverse, ParamID::smpLoop, ParamID::smpTexture, ParamID::smpGrain,
             ParamID::smpPlayMode, ParamID::smpBeats,
-            ParamID::lfoOn, ParamID::lfo2On, ParamID::smpGrainAmt, ParamID::smpGrainType, ParamID::noiseColor
+            ParamID::lfoOn, ParamID::lfo2On, ParamID::smpGrainAmt, ParamID::smpGrainType, ParamID::noiseColor,
+            ParamID::osc1On, ParamID::osc2On, ParamID::subOn, ParamID::noiseOn, ParamID::uniOn, ParamID::f1On, ParamID::driveOn, ParamID::grainsOn, ParamID::analog,
+            ParamID::rsSpeed, ParamID::rsHarm, ParamID::rsPartials, ParamID::rsNoise, ParamID::rsTone, ParamID::rsStretch, ParamID::rsPitch, ParamID::rsWidth,
+            ParamID::macroBright, ParamID::macroBody, ParamID::macroMove, ParamID::macroSpace, ParamID::macroChaos,
+            ParamID::fxEqOn, ParamID::fxEqLow, ParamID::fxEqMid, ParamID::fxEqMidFreq, ParamID::fxEqHigh, ParamID::fxCompOn, ParamID::fxCompAmt,
+            ParamID::fxChorusOn, ParamID::fxChorusRate, ParamID::fxChorusDepth, ParamID::fxChorusMix,
+            ParamID::fxDelayOn, ParamID::fxDelaySync, ParamID::fxDelayMs, ParamID::fxDelayFb, ParamID::fxDelayMix, ParamID::fxDelayPing, ParamID::fxDelayTone,
+            ParamID::fxRevOn, ParamID::fxRevSize, ParamID::fxRevDecay, ParamID::fxRevDamp, ParamID::fxRevPre, ParamID::fxRevMix, ParamID::fxWidth,
+            ParamID::quality, ParamID::mpeOn, ParamID::master
         };
         static_assert (sizeof (list) / sizeof (list[0]) == count, "lista de parámetros incompleta");
         return list;

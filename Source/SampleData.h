@@ -12,6 +12,7 @@ struct SampleData
     bool melodic = false;            // es una frase (varias notas): rootNote es la tónica de su tonalidad
     int keyTonic = -1;               // 0 = C ... 11 = B
     bool keyMinor = false;
+    float width = 0.0f;              // ancho estéreo del original (0 = mono)
     juce::String name;
     juce::File file;
     juce::MemoryBlock embedded;      // copia comprimida (FLAC) para guardarla dentro del proyecto
@@ -133,6 +134,14 @@ namespace SampleTools
         s->audio.clear();
         for (int ch = 0; ch < src.getNumChannels(); ++ch)
             s->audio.addFrom (0, 0, src, ch, 0, n, 1.0f / (float) src.getNumChannels());
+        if (src.getNumChannels() >= 2)
+        {
+            // Ancho estéreo: energía de los lados contra el centro
+            double side = 0.0, mid = 1.0e-12;
+            const float* l = src.getReadPointer (0); const float* r = src.getReadPointer (1);
+            for (int i = 0; i < n; ++i) { const double sd = 0.5 * (l[i] - r[i]), md = 0.5 * (l[i] + r[i]); side += sd * sd; mid += md * md; }
+            s->width = (float) juce::jlimit (0.0, 1.0, std::sqrt (side / mid));
+        }
 
         // Normaliza a -1 dBFS para que todos los samples suenen parecido de fuerte
         const float mag = s->audio.getMagnitude (0, 0, n);

@@ -4,6 +4,7 @@
 #include "SampleData.h"
 #include "Wavetable.h"
 #include "DspParts.h"
+#include "ResynthModel.h"
 
 struct SynthSound : public juce::SynthesiserSound
 {
@@ -30,6 +31,12 @@ struct VoiceContext
     std::atomic<float> regionStart { 0.0f }, regionEnd { 1.0f }, rootOffset { 0.0f };
 
     float lastNote = -1.0f;   // para el glide
+
+    // v3
+    SharedHolder<ResynthModel> models;                 // modelo del motor de resíntesis
+    std::atomic<bool> abOriginal { false };            // A/B: tocar el sample original
+    std::atomic<float> abGain { 1.0f };
+    std::atomic<float> masterBend { 0.0f };            // MPE: pitch bend del canal maestro
 };
 
 class SynthVoice : public juce::SynthesiserVoice
@@ -45,6 +52,7 @@ public:
         sr = sampleRate;
         for (auto* e : { &ampEnv, &env2, &env3 }) e->setSampleRate (sampleRate);
         for (auto& f : filters) f.reset();
+        rsPlayer.prepare (sampleRate);
     }
 
     bool canPlaySound (juce::SynthesiserSound* s) override { return dynamic_cast<SynthSound*> (s) != nullptr; }
@@ -84,6 +92,9 @@ public:
             lfo1.noteOn (random);
             lfo2.noteOn (random);
             sample = ctx.samples.get();
+            rsPlayer.start (ctx.models.get(), random);
+            noteDrift = random.nextFloat() * 2.0f - 1.0f;
+            abPos = 0.0;
             playhead = 0.0;
             grainTimer = 0;
             for (auto& g : grains) g.active = false;
@@ -122,7 +133,7 @@ public:
     }
 
     void pitchWheelMoved (int value) override { wheel = (value - 8192) / 8192.0f; }
-    void controllerMoved (int, int) override {}
+    void controllerMoved (int cc, int value) override { if (cc == 74) timbre = value / 127.0f; }   // MPE: "timbre"
     void aftertouchChanged (int value) override { polyPressure = value / 127.0f; }
     void channelPressureChanged (int value) override { polyPressure = value / 127.0f; }
 
@@ -136,6 +147,31 @@ public:
         readBlockParams();
         float* outL = out.getWritePointer (0);
         float* outR = out.getNumChannels() > 1 ? out.getWritePointer (1) : nullptr;
+
+        // A/B: el sample original, afinado a la nota, al mismo volumen que lo recreado
+        if (ctx.abOriginal.load() && sample != nullptr)
+        {
+            const double ratio = std::exp2 ((targetNote - (sample->rootNote + ctx.rootOffset.load())) / 12.0) * sample->sampleRate / sr;
+            const int len = sample->length();
+            const double a = ctx.regionStart.load() * (len - 1), b = ctx.regionEnd.load() * (len - 1);
+            const float gain = ctx.abGain.load() * velGain * 0.3f;
+            for (int i = 0; i < num; ++i)
+            {
+                const float e = ampEnv.next();
+                const double idx = a + abPos;
+                float v = 0.0f;
+                if (idx < b)
+                {
+                    const int i0 = (int) idx; const float fr = (float) (idx - i0);
+                    v = sample->data()[i0] + (sample->data()[juce::jmin (len - 1, i0 + 1)] - sample->data()[i0]) * fr;
+                }
+                abPos += ratio;
+                const float o = v * e * gain;
+                if (outR != nullptr) { outL[start + i] += o; outR[start + i] += o; } else outL[start + i] += o;
+                if (! ampEnv.isActive() || idx >= b + sample->sampleRate * 0.05) { ampEnv.reset(); clearCurrentNote(); break; }
+            }
+            return;
+        }
 
         for (int i = 0; i < num; ++i)
         {
@@ -156,17 +192,17 @@ public:
             {
                 if (parallel)
                 {
-                    const float l1 = filters[0].process (L), r1 = filters[1].process (R);
+                    const float l1 = f1On ? filters[0].process (L) : L, r1 = f1On ? filters[1].process (R) : R;
                     const float l2 = filters[2].process (L), r2 = filters[3].process (R);
                     L = 0.5f * (l1 + l2); R = 0.5f * (r1 + r2);
                 }
                 else
                 {
-                    L = filters[2].process (filters[0].process (L));
-                    R = filters[3].process (filters[1].process (R));
+                    L = filters[2].process (f1On ? filters[0].process (L) : L);
+                    R = filters[3].process (f1On ? filters[1].process (R) : R);
                 }
             }
-            else
+            else if (f1On)
             {
                 L = filters[0].process (L);
                 R = filters[1].process (R);
@@ -202,16 +238,23 @@ private:
     {
         updateEnvelopes();
         if (sample == nullptr) sample = ctx.samples.get();
-        sampler = params.i (P::engine) == 1 && sample != nullptr && sample->length() > 4;
+        engine = params.i (P::engine);
+        sampler = engine == Engine::Sample && sample != nullptr && sample->length() > 4;
+        resynth = engine == Engine::Resynth && rsPlayer.hasModel();
+        osc1On = params[P::osc1On] > 0.5f; osc2On = params[P::osc2On] > 0.5f;
+        subOn = params[P::subOn] > 0.5f;   noiseOn = params[P::noiseOn] > 0.5f;
+        f1On = params[P::f1On] > 0.5f;
 
         wave1 = params.i (P::osc1Wave);  wave2 = params.i (P::osc2Wave);
         table1 = ctx.tables.get (params.i (P::osc1Table));
         table2 = ctx.tables.get (params.i (P::osc2Table));
-        unison = sampler ? 1 : juce::jlimit (1, maxUnison, params.i (P::uniVoices));
+        unison = (sampler || resynth || params[P::uniOn] < 0.5f) ? 1 : juce::jlimit (1, maxUnison, params.i (P::uniVoices));
         f2On = params[P::f2On] > 0.5f;
         parallel = params.i (P::filterRouting) == 1;
-        drive = params[P::drive];
-        driveGain = 1.0f + drive * 9.0f;
+        // Locura: también empuja la saturación
+        const float chaosAmt = params[P::macroChaos];
+        drive = juce::jlimit (0.0f, 1.0f, (params[P::driveOn] > 0.5f ? params[P::drive] : 0.0f) + 0.5f * chaosAmt);
+        driveGain = 1.0f + 12.0f * std::pow (drive, 0.75f);   // responde desde el principio de la perilla
         driveNorm = 1.0f / std::tanh (driveGain);
         const float vs = params[P::velSens];
         velGain = 1.0f - vs + vs * velocity;
@@ -248,8 +291,22 @@ private:
         const float l1 = params[P::lfoOn]  > 0.5f ? runLfo (lfo1, P::lfoRate, P::lfoShape, P::lfoSync, P::lfoRetrig, P::lfoFade, sampleIndex) : 0.0f;
         const float l2 = params[P::lfo2On] > 0.5f ? runLfo (lfo2, P::lfo2Rate, P::lfo2Shape, P::lfo2Sync, P::lfo2Retrig, P::lfo2Fade, sampleIndex) : 0.0f;
 
+        // ---- Macros, locura y deriva analógica ----
+        const float move = params[P::macroMove], chaos = params[P::macroChaos], body = params[P::macroBody];
+        const float bright = params[P::macroBright], analog = params[P::analog];
+        {
+            const float dt = (float) controlRate / (float) sr;
+            // caminatas aleatorias lentas (deriva) y rápidas (locura)
+            driftA += (random.nextFloat() * 2.0f - 1.0f) * dt * 3.0f - driftA * dt * 0.5f;
+            driftB += (random.nextFloat() * 2.0f - 1.0f) * dt * 3.0f - driftB * dt * 0.5f;
+            chaosTarget = (chaosTimer -= dt) <= 0.0f ? (chaosTimer = 0.04f + 0.25f * random.nextFloat(), random.nextFloat() * 2.0f - 1.0f) : chaosTarget;
+            chaosVal += (chaosTarget - chaosVal) * juce::jmin (1.0f, dt * 25.0f);
+        }
+        const bool mpe = params[P::mpeOn] > 0.5f;
+        const float modWheelSrc = mpe ? juce::jmax (timbre, ctx.modWheel.load()) : ctx.modWheel.load();
+
         // ---- Matriz ----
-        const float src[ModSrc::count] { env2Val, env3Val, l1, l2, velocity, ctx.modWheel.load(),
+        const float src[ModSrc::count] { env2Val, env3Val, l1, l2, velocity, modWheelSrc,
                                          juce::jmax (polyPressure, ctx.pressure.load()), (targetNote - 60.0f) / 24.0f };
         const float amount = params[P::modAmount];
         float m[ModDst::count] {};
@@ -270,17 +327,21 @@ private:
         }
         else currentNote = targetNote;
 
-        const float bend = wheel * (float) params.i (P::bendRange);
-        const float vib = l1 * params[P::lfoPitch] / 100.0f;
-        const float pitch = currentNote + bend + vib + m[ModDst::Pitch] * 12.0f;
+        // MPE: cada nota en su canal dobla hasta 48 semitonos; el canal 1 dobla a todas
+        const bool memberChannel = mpe && ! isPlayingChannel (1);
+        const float bend = wheel * (memberChannel ? 48.0f : (float) params.i (P::bendRange))
+                         + (mpe ? ctx.masterBend.load() * (float) params.i (P::bendRange) : 0.0f);
+        const float vib = l1 * params[P::lfoPitch] / 100.0f * (1.0f + 2.0f * move) + l2 * move * 0.15f;
+        const float drift = analog * (0.08f * driftA + 0.05f * noteDrift);
+        const float pitch = currentNote + bend + vib + m[ModDst::Pitch] * 12.0f + drift + chaos * chaos * 0.8f * chaosVal;
 
         shape1   = juce::jlimit (0.0f, 1.0f, params[P::osc1Shape] + m[ModDst::Shape1]);
         shape2   = juce::jlimit (0.0f, 1.0f, params[P::osc2Shape] + m[ModDst::Shape2]);
         mix      = juce::jlimit (0.0f, 1.0f, params[P::oscMix] + m[ModDst::Mix]);
-        fm       = juce::jlimit (0.0f, 1.0f, params[P::fmAmount] + m[ModDst::Fm]);
-        subLvl   = params[P::subLevel];
-        noiseLvl = params[P::noise];
-        noiseMod = juce::jlimit (0.0f, 1.0f, m[ModDst::Noise]);
+        fm       = juce::jlimit (0.0f, 1.0f, params[P::fmAmount] + m[ModDst::Fm] + 0.45f * chaos * (0.6f + 0.4f * chaosVal));
+        subLvl   = subOn ? juce::jlimit (0.0f, 1.0f, params[P::subLevel] * (1.0f + juce::jmin (0.0f, body)) + juce::jmax (0.0f, body) * 0.5f) : 0.0f;
+        noiseLvl = noiseOn ? params[P::noise] : 0.0f;
+        noiseMod = noiseOn ? juce::jlimit (0.0f, 1.0f, m[ModDst::Noise]) : 0.0f;
         {
             const float col = params[P::noiseColor];
             if (col > 0.995f) noiseLp = 1.0f;
@@ -313,18 +374,26 @@ private:
         samplePitch = pitch;
 
         // ---- Filtros ----
-        const float c1 = params[P::cutoff] * std::exp2 (params[P::filterEnv] * 6.0f * env2Val + params[P::lfoFilter] * 3.0f * l1 + m[ModDst::Cutoff1] * 5.0f);
+        // Macros sobre el corte: Brillo lo abre/cierra, Movimiento lo mece, Locura lo sacude
+        const float macroOct = bright * 2.5f + move * 0.8f * l2 + chaos * 2.0f * chaosVal + analog * 0.15f * driftB;
+        const float c1 = params[P::cutoff] * std::exp2 (params[P::filterEnv] * 6.0f * env2Val + params[P::lfoFilter] * 3.0f * l1 * (1.0f + move)
+                                                       + m[ModDst::Cutoff1] * 5.0f + macroOct);
         const float r1 = juce::jlimit (0.0f, 1.0f, params[P::resonance] + m[ModDst::Reso1]);
         const int t1 = params.i (P::filterType), s1 = params.i (P::filterSlope), ch1 = params.i (P::filterChar);
         filters[0].set (t1, s1, ch1, c1, r1, sr);
         filters[1].set (t1, s1, ch1, c1, r1, sr);
         if (f2On)
         {
-            const float c2 = params[P::f2Cutoff] * std::exp2 (params[P::f2Env] * 6.0f * env2Val + m[ModDst::Cutoff2] * 5.0f);
+            const float c2 = params[P::f2Cutoff] * std::exp2 (params[P::f2Env] * 6.0f * env2Val + m[ModDst::Cutoff2] * 5.0f + macroOct);
             const int t2 = params.i (P::f2Type), s2 = params.i (P::f2Slope), ch2 = params.i (P::f2Char);
             filters[2].set (t2, s2, ch2, c2, params[P::f2Reso], sr);
             filters[3].set (t2, s2, ch2, c2, params[P::f2Reso], sr);
         }
+
+        // ---- Resíntesis ----
+        if (resynth)
+            rsPlayer.control (noteHz (pitch), params[P::rsSpeed], params[P::rsHarm], params[P::rsPartials], params[P::rsNoise],
+                              params[P::rsStretch], params[P::rsPitch] > 0.5f, controlRate);
 
         // ---- Volumen y paneo ----
         volTarget = juce::jlimit (0.0f, 2.0f, 1.0f + m[ModDst::Volume]);
@@ -341,7 +410,12 @@ private:
     void generate (float& L, float& R)
     {
         float centre = 0.0f;
-        if (sampler)
+        if (resynth)
+        {
+            rsPlayer.next (L, R, params[P::rsTone], params[P::rsWidth] * (ctx.models.get() != nullptr ? juce::jmax (0.3f, ctx.models.get()->width * 2.0f) : 1.0f), random);
+            L *= 2.0f; R *= 2.0f;   // misma escala que un oscilador (después se multiplica por 0.5)
+        }
+        else if (sampler)
         {
             const double ratio = std::exp2 ((samplePitch - (sample->rootNote + ctx.rootOffset.load()) + smpTune) / 12.0) * sample->sampleRate / sr;
             const float main = 2.0f * ((tempoMode || smpTexture > 0.01f) ? nextGranular (ratio) : nextSample (ratio));
@@ -360,12 +434,14 @@ private:
         {
             const Wavetable* tb1 = table1.get();
             const Wavetable* tb2 = table2.get();
-            const double fmDepth = (double) fm * fm * 1.5;
+            const double fmDepth = 1.5 * std::pow ((double) fm, 1.15);   // la FM se nota desde el principio de la perilla
+            const float w1 = osc1On ? (osc2On ? 1.0f - mix : 1.0f) : 0.0f;
+            const float w2 = osc2On ? (osc1On ? mix : 1.0f) : 0.0f;
             for (int u = 0; u < unison; ++u)
             {
                 const float o2 = osc2[(size_t) u].next (wave2, shape2, tb2);
                 const float o1 = osc1[(size_t) u].next (wave1, shape1, tb1, fmDepth * o2);
-                const float s = (o1 * (1.0f - mix) + o2 * mix) * uniNorm;
+                const float s = (o1 * w1 + o2 * w2) * uniNorm;
                 L += s * panL[(size_t) u] * 1.41421f;
                 R += s * panR[(size_t) u] * 1.41421f;
             }
@@ -458,7 +534,7 @@ private:
         smpLoop      = params[P::smpLoop] > 0.5f;
         smpTexture   = params[P::smpTexture];
         grainLenOut  = juce::jmax (16, (int) (params[P::smpGrain] * sr));
-        grainAmt     = params[P::smpGrainAmt];
+        grainAmt     = params[P::grainsOn] > 0.5f ? params[P::smpGrainAmt] : 0.0f;
         grainType    = params.i (P::smpGrainType);
 
         // Modo Tempo: la sección dura N tiempos al BPM del proyecto
@@ -618,6 +694,14 @@ private:
     int cloudTimer = 0, grainType = 0;
     float grainAmt = 0.0f;
     int newestGrain = -1;
+
+    // v3
+    ResynthPlayer rsPlayer;
+    int engine = 0;
+    bool resynth = false, osc1On = true, osc2On = true, subOn = true, noiseOn = true, f1On = true;
+    float timbre = 0.0f, noteDrift = 0.0f, driftA = 0.0f, driftB = 0.0f;
+    float chaosVal = 0.0f, chaosTarget = 0.0f, chaosTimer = 0.0f;
+    double abPos = 0.0;
 };
 
 // ---------------------------------------------------------------------------
@@ -650,6 +734,13 @@ public:
             }
         }
         juce::Synthesiser::noteOff (channel, note, vel, allowTailOff);
+    }
+
+    void handlePitchWheel (int channel, int value) override
+    {
+        // MPE: el canal 1 es el maestro y dobla todas las notas
+        if (ctx.params[P::mpeOn] > 0.5f && channel == 1) { ctx.masterBend = (value - 8192) / 8192.0f; return; }
+        juce::Synthesiser::handlePitchWheel (channel, value);
     }
 
     void handleController (int channel, int cc, int value) override

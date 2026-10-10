@@ -4,7 +4,7 @@
 
 NebulaAudioProcessor::NebulaAudioProcessor()
     : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
-      state (*this, nullptr, "NebulaState", createParameterLayout()),
+      state (*this, &undoManager, "NebulaState", createParameterLayout()),
       garden (state),
       params (state),
       voiceCtx (params, sampleSource, tables),
@@ -149,64 +149,32 @@ NebulaAudioProcessor::RecreateResult NebulaAudioProcessor::recreateFromSample()
     if (s == nullptr) return RecreateResult::Failed;
     imitator.cancel();
 
-    ResynthData rd;
-    const auto prof = SoundProfiler::analyse (*s, regionStart(), regionEnd(), rootOffset(), &rd, 64);
-    if (! prof.valid) return RecreateResult::Failed;
+    SoundProfile prof;
+    auto model = ResynthBuilder::build (*s, regionStart(), regionEnd(), rootOffset(), prof);
+    if (model == nullptr) return RecreateResult::Failed;
 
-    // Sin nota clara o inarmónico (campana, metal): la tabla no lo captura bien → búsqueda con osciladores
-    if (! prof.pitched || prof.inharmonic || rd.cycles.size() < 2)
+    voiceCtx.models.set (model);
+    resynthModel64 = model->toBase64();
+
+    // Mismo volumen que el original para el A/B
     {
-        startImitation();
-        lastProfile = prof;
-        recipeOrigin = RecipeOrigin::Imitated;
-        return RecreateResult::Imitating;
+        const int n = s->length();
+        const int a = (int) (regionStart() * (float) n), b = juce::jmax (a + 1, (int) (regionEnd() * (float) n));
+        float pk = 1.0e-6f;
+        for (int i = a; i < b; ++i) pk = juce::jmax (pk, std::abs (s->data()[i]));
+        voiceCtx.abGain = 1.0f / pk;
     }
 
-    applyResynthesis (prof, rd);
-    lastProfile = prof;
-    lastProfileSample = s->name;
-    recipeOrigin = RecipeOrigin::Recreated;
-    lastProfile.similarity = similarityOfCurrentPatch();
-    lastSimilarity = lastProfile.similarity;
-    ++imitationCount;
-    return RecreateResult::Resynthesized;
-}
-
-void NebulaAudioProcessor::applyResynthesis (const SoundProfile& prof, ResynthData& rd)
-{
-    auto s = sampleSource.get();
-    auto table = Wavetable::fromCycles (rd.cycles, s != nullptr ? s->name : juce::String ("Recreado"));
-    tables.setUser (table);
-    tables.hasCustomUser = true;
-
     auto set = [this] (const juce::String& id, float v) { if (auto* p = state.getParameter (id)) p->setValueNotifyingHost (p->convertTo0to1 (v)); };
-
-    // Todo a su valor de fábrica (menos lo de interpretación y lo del sample)
     for (auto* p : getParameters())
         if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (p))
         {
             const auto id = rp->getParameterID();
-            if (GenomeOps::isPerformanceParam (id) || id.startsWith ("smp")) continue;
+            if (GenomeOps::isPerformanceParam (id) || id.startsWith ("smp") || id.startsWith ("fx") || id.startsWith ("macro")) continue;
             rp->setValueNotifyingHost (rp->getDefaultValue());
         }
-
-    // Oscilador 1 = la tabla del sonido; la Env 3 la recorre como pasó en el original
-    set (ParamID::engine, 0.0f);
-    set (ParamID::osc1Wave, (float) Wave::Table);
-    set (ParamID::osc1Table, (float) WavetableBank::userIndex);
-    set (ParamID::osc1Shape, 0.0f);
-    set (ParamID::osc1Octave, 0.0f);
-    set (ParamID::oscMix, 0.0f);
-    set (ParamID::subLevel, 0.0f);
-    set (ParamID::fmAmount, 0.0f);
-    set (ParamID::noise, 0.0f);
-    set (ParamID::noiseColor, rd.noiseColor);
-    set (ParamID::uniVoices, 1.0f);
-    set (ParamID::uniDetune, 0.0f);
-
-    // Filtros abiertos y limpios: no colorean
+    set (ParamID::engine, (float) Engine::Resynth);
     set (ParamID::filterType, (float) FilterKind::LowPass);
-    set (ParamID::filterSlope, 0.0f);
     set (ParamID::filterChar, 0.0f);
     set (ParamID::cutoff, 20000.0f);
     set (ParamID::resonance, 0.0f);
@@ -214,54 +182,29 @@ void NebulaAudioProcessor::applyResynthesis (const SoundProfile& prof, ResynthDa
     set (ParamID::drive, 0.0f);
     set (ParamID::f2On, 0.0f);
     set (ParamID::lfoFilter, 0.0f);
-
-    // Volumen: la tabla ya trae la forma del volumen; la Env 1 sólo abre y suelta
+    set (ParamID::lfoPitch, 0.0f);
+    set (ParamID::subLevel, 0.0f);
+    set (ParamID::noise, 0.0f);
     set (ParamID::ampA, 0.002f);
     set (ParamID::ampD, 0.1f);
     set (ParamID::ampS, 1.0f);
     set (ParamID::ampR, prof.releaseS);
     set (ParamID::ampCurve, 0.0f);
-
-    // Env 3 recorre la tabla
-    set (ParamID::env3A, prof.scanS);
-    set (ParamID::env3D, 0.1f);
-    set (ParamID::env3S, 1.0f);
-    set (ParamID::env3R, 8.0f);
-    set (ParamID::env3Curve, rd.scanCurve);
-    set (ParamID::env3Mode, 0.0f);
+    set (ParamID::velSens, 0.3f);
     for (int src = 0; src < ModSrc::count; ++src)
         for (int d = 0; d < ModDst::count; ++d)
             set (matrixID (src, d), 0.0f);
-    set (matrixID (ModSrc::Env3, ModDst::Shape1), 1.0f);
-
-    // Ruido con su propia envolvente (Env 2)
-    if (rd.noiseAmount > 0.001f)
-    {
-        set (ParamID::fltA, rd.nA);
-        set (ParamID::fltD, rd.nD);
-        set (ParamID::fltS, rd.nS);
-        set (ParamID::fltR, rd.nR);
-        set (ParamID::fltCurve, 0.0f);
-        set (ParamID::fltMode, 0.0f);
-        set (matrixID (ModSrc::Env2, ModDst::Noise), rd.noiseAmount);
-    }
-
-    // Vibrato
-    if (prof.vibratoHz > 0.0f)
-    {
-        set (ParamID::lfoOn, 1.0f);
-        set (ParamID::lfoShape, (float) LfoShape::Sine);
-        set (ParamID::lfoSync, 0.0f);
-        set (ParamID::lfoRate, prof.vibratoHz);
-        set (ParamID::lfoPitch, prof.vibratoCents);
-        set (ParamID::lfoRetrig, 0.0f);
-        set (ParamID::lfoFade, 0.15f);
-    }
-    set (ParamID::modTime, 1.0f);
-    set (ParamID::modAmount, 1.0f);
 
     state.state.setProperty ("preset", -1, nullptr);
+    lastProfile = prof;
+    lastProfileSample = s->name;
+    recipeOrigin = RecipeOrigin::Recreated;
     garden.germinate();   // el sonido recreado es la nueva semilla
+    markReference();
+    lastProfile.similarity = similarityOfCurrentPatch();
+    lastSimilarity = lastProfile.similarity;
+    ++imitationCount;
+    return RecreateResult::Resynthesized;
 }
 
 float NebulaAudioProcessor::similarityOfCurrentPatch()
@@ -270,9 +213,75 @@ float NebulaAudioProcessor::similarityOfCurrentPatch()
     if (s == nullptr) return -1.0f;
     GenomeOps ops (*this, 1);
     OfflineSynth offline (getParameters(), ops.parameters(), tables);
+    offline.setModel (voiceCtx.models.get());
     Genome g;
     for (auto* p : ops.parameters()) g.genes.push_back (p->getValue());
-    return ImitationTools::similarity (offline, g, *s, regionStart(), regionEnd(), rootOffset());
+    auto m = voiceCtx.models.get();
+    const bool rs = m != nullptr && juce::roundToInt (state.getRawParameterValue (ParamID::engine)->load()) == Engine::Resynth;
+    return ImitationTools::similarity (offline, g, *s, regionStart(), regionEnd(), rootOffset(), rs ? m->rootNote : -1.0f);
+}
+
+juce::File NebulaAudioProcessor::exportMidi()
+{
+    auto s = sampleSource.get();
+    if (s == nullptr) return {};
+    const auto notes = Exporter::transcribe (*s, regionStart(), regionEnd());
+    if (notes.empty()) return {};
+    return Exporter::writeMidi (notes, voiceCtx.bpm, s->name);
+}
+
+juce::File NebulaAudioProcessor::exportAudio()
+{
+    // El sonido actual tocado en C (o en la raíz del sample) con sus efectos
+    const double sr = currentSampleRate > 0 ? currentSampleRate : 48000.0;
+    GenomeOps ops (*this, 1);
+    OfflineSynth offline (getParameters(), ops.parameters(), tables);
+    offline.setModel (voiceCtx.models.get());
+    Genome g;
+    for (auto* p : ops.parameters()) g.genes.push_back (p->getValue());
+    offline.setGenome (g);
+    double len = 2.0;
+    if (auto s = sampleSource.get()) len = juce::jlimit (0.5, 10.0, (regionEnd() - regionStart()) * s->length() / s->sampleRate);
+    const double tail = juce::jlimit (0.2, 6.0, (double) state.getRawParameterValue (ParamID::ampR)->load() + (state.getRawParameterValue (ParamID::fxRevOn)->load() > 0.5f ? 2.0 : 0.3));
+    juce::AudioBuffer<float> out;
+    offline.renderStereo (out, homeKey(), (int) (len * sr), (int) ((len + tail) * sr), sr);
+    FxChain fxo;
+    fxo.prepare (sr, out.getNumSamples());
+    fxo.process (out, params, voiceCtx.bpm);
+    const float mag = out.getMagnitude (0, out.getNumSamples());
+    if (mag > 0.98f) out.applyGain (0.98f / mag);
+    auto s = sampleSource.get();
+    return Exporter::writeWav (out, sr, (s != nullptr ? s->name : juce::String ("Nebula")) + " - Nebula.wav");
+}
+
+juce::File NebulaAudioProcessor::exportWavetable()
+{
+    if (auto m = voiceCtx.models.get(); m != nullptr && m->harmonic != nullptr
+        && juce::roundToInt (state.getRawParameterValue (ParamID::engine)->load()) == Engine::Resynth)
+        return Exporter::writeWavetable (*m->harmonic);
+    if (auto t = tables.get (WavetableBank::userIndex); t != nullptr && tables.hasCustomUser)
+        return Exporter::writeWavetable (*t);
+    return {};
+}
+
+void NebulaAudioProcessor::markReference()
+{
+    reference = garden.capture();
+}
+
+float NebulaAudioProcessor::computeCraziness()
+{
+    const Genome now = garden.capture();
+    const float dist = reference.isValid() ? juce::jmin (1.0f, GenomeOps::distance (reference, now) * 1.8f) : 0.0f;
+    auto v = [this] (const char* id) { return state.getRawParameterValue (id)->load(); };
+    float mod = 0.0f;
+    for (int s = 0; s < ModSrc::count; ++s)
+        for (int d = 0; d < ModDst::count; ++d) mod += std::abs (state.getRawParameterValue (matrixID (s, d))->load());
+    const float c = 0.5f * dist + 0.55f * v (ParamID::macroChaos) + 0.12f * v (ParamID::macroMove)
+                  + 0.12f * juce::jmin (1.0f, mod * 0.4f) + 0.08f * v (ParamID::fmAmount) + 0.06f * v (ParamID::drive);
+    const float out = juce::jlimit (0.0f, 1.0f, c);
+    craziness = craziness.load() + (out - craziness.load()) * 0.15f;
+    return craziness.load();
 }
 
 juce::String NebulaAudioProcessor::recipeText()
@@ -291,14 +300,22 @@ juce::String NebulaAudioProcessor::recipeText()
         if (recipeOrigin == RecipeOrigin::Recreated)
         {
             t << "## Como lo recreo Nebula\n";
-            t << "1. Corto el sonido en 64 momentos y en cada uno midio sus armonicos (hasta " << juce::jmin (1023, (int) (18000.0f / lastProfile.f0))
-              << "). Cada momento se volvio un cuadro de la tabla de ondas \"Usuario\": es sintesis aditiva guardada como wavetable.\n";
-            t << "2. Como cada cuadro es un ciclo exacto, la tabla suena en la nota que toques, sin la desafinacion del original.\n";
-            t << "3. La Env 3 recorre la tabla en " << Recipe::sec (lastProfile.scanS) << " (matriz Env 3 -> Forma 1 = 100 %), asi el timbre y el volumen cambian igual que en el original.\n";
-            if (lastProfile.noiseRatio > 0.03f && ! lastProfile.inharmonic)
-                t << "4. La parte de ruido (lo que no es nota) va aparte: ruido " << Recipe::brightnessWord (lastProfile.noiseBrightnessHz)
-                  << " con su propia envolvente (matriz Env 2 -> Ruido).\n";
-            if (lastProfile.vibratoHz > 0.0f) t << "5. El vibrato se separo y lo hace el LFO 1.\n";
+            auto m = voiceCtx.models.get();
+            int step = 1;
+            if (m != nullptr && m->harmonic != nullptr)
+                t << step++ << ". Midio sus armonicos en " << m->frames() << " momentos (hasta " << juce::jmin (1023, (int) (18000.0f / lastProfile.f0))
+                  << ") y los guardo como una tabla que cambia en el tiempo: sintesis aditiva.\n";
+            if (m != nullptr && ! m->partials.empty())
+                t << step++ << ". Encontro " << (int) m->partials.size() << " parciales sueltos (frecuencias propias, como en una campana o un golpe) y siguio el volumen de cada uno.\n";
+            if (m != nullptr && ! m->noise.empty())
+                t << step++ << ". Separo el ruido (lo que no es nota) en 24 bandas, cada una con su volumen en el tiempo.\n";
+            if (m != nullptr && ! m->pitchCurve.empty())
+            {
+                bool moves = false; for (auto v : m->pitchCurve) if (std::abs (v) > 5.0f) moves = true;
+                if (moves) t << step++ << ". Copio la curva de tono del original (vibrato, glides o la melodia).\n";
+            }
+            t << step++ << ". Todo queda afinado a la tecla que toques: en C suena C.\n";
+            if (m != nullptr && m->width > 0.05f) t << step++ << ". Conserva el ancho estereo del original (" << Recipe::pct (m->width) << ").\n";
             t << "\n";
         }
         t << Recipe::describeClassic (lastProfile) << "\n";
@@ -424,11 +441,12 @@ void NebulaAudioProcessor::applyImitationResult()
     imitator.finished = false;
     garden.plantGenome (imitator.result());
     lastSimilarity = imitator.similarity.load();
+    markReference();
     ++imitationCount;
 }
 
 //==============================================================================
-void NebulaAudioProcessor::prepareToPlay (double sampleRate, int)
+void NebulaAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlockExpected)
 {
     currentSampleRate = sampleRate;
     synth.setCurrentPlaybackSampleRate (sampleRate);
@@ -436,6 +454,14 @@ void NebulaAudioProcessor::prepareToPlay (double sampleRate, int)
         if (auto* v = dynamic_cast<SynthVoice*> (synth.getVoice (i)))
             v->prepare (sampleRate);
 
+    maxBlock = juce::jmax (16, samplesPerBlockExpected);
+    os2 = std::make_unique<juce::dsp::Oversampling<float>> (2, 1, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, false);
+    os4 = std::make_unique<juce::dsp::Oversampling<float>> (2, 2, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, false);
+    os2->initProcessing ((size_t) maxBlock);
+    os4->initProcessing ((size_t) maxBlock);
+    scaledMidi.ensureSize (4096);
+    currentFactor = 1;
+    fx.prepare (sampleRate, maxBlock);
     masterGain.reset (sampleRate, 0.03);
     masterGain.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (state.getRawParameterValue (ParamID::master)->load(), -60.0f));
     keyboardState.reset();
@@ -468,7 +494,45 @@ void NebulaAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
 
     // Mezcla las notas del teclado en pantalla con el MIDI que llega de Ableton
     keyboardState.processNextMidiBuffer (midi, 0, n, true);
-    synth.renderNextBlock (buffer, midi, 0, n);
+
+    // Calidad: el sinte corre a 2x o 4x y se filtra de vuelta (sin aliasing). Al exportar, mínimo 2x.
+    int q = params.i (P::quality);
+    if (isNonRealtime()) q = juce::jmax (q, 1);
+    const int factor = (q == 2 ? 4 : q == 1 ? 2 : 1);
+    if (n > maxBlock) { /* bloque más grande de lo esperado: sin oversampling */ }
+    const int useFactor = n > maxBlock ? 1 : factor;
+    if (useFactor != currentFactor)
+    {
+        currentFactor = useFactor;
+        synth.setCurrentPlaybackSampleRate (currentSampleRate * useFactor);
+        for (int i = 0; i < synth.getNumVoices(); ++i)
+            if (auto* v = dynamic_cast<SynthVoice*> (synth.getVoice (i))) v->prepare (currentSampleRate * useFactor);
+    }
+    if (useFactor == 1)
+        synth.renderNextBlock (buffer, midi, 0, n);
+    else
+    {
+        auto& os = useFactor == 2 ? *os2 : *os4;
+        juce::dsp::AudioBlock<float> block (buffer);
+        auto up = os.processSamplesUp (block);
+        up.clear();
+        float* chans[2] { up.getChannelPointer (0), up.getNumChannels() > 1 ? up.getChannelPointer (1) : up.getChannelPointer (0) };
+        juce::AudioBuffer<float> upBuf (chans, (int) juce::jmin ((size_t) 2, up.getNumChannels()), (int) up.getNumSamples());
+        scaledMidi.clear();
+        for (const auto meta : midi) scaledMidi.addEvent (meta.getMessage(), meta.samplePosition * useFactor);
+        synth.renderNextBlock (upBuf, scaledMidi, 0, upBuf.getNumSamples());
+        os.processSamplesDown (block);
+    }
+
+    fx.process (buffer, params, voiceCtx.bpm);
+
+    // Quita cualquier corriente continua (DC) de la salida
+    for (int ch = 0; ch < juce::jmin (2, buffer.getNumChannels()); ++ch)
+    {
+        float* d = buffer.getWritePointer (ch);
+        float& x1 = dcX[ch]; float& y1 = dcY[ch];
+        for (int i = 0; i < n; ++i) { const float y = d[i] - x1 + 0.9995f * y1; x1 = d[i]; y1 = y; d[i] = y; }
+    }
 
     // Escuchar la selección del sample
     if (previewing.load())
@@ -532,6 +596,7 @@ void NebulaAudioProcessor::loadPreset (int index)
 {
     applyPreset (state, index);
     state.state.setProperty ("preset", index, nullptr);
+    markReference();
 }
 
 int NebulaAudioProcessor::getPresetIndex() const
@@ -570,6 +635,8 @@ bool NebulaAudioProcessor::saveUserPreset (const juce::String& rawName)
     if (tables.hasCustomUser)
         if (auto t = tables.get (WavetableBank::userIndex))
             xml.setAttribute ("userTable", t->toBase64());
+    if (resynthModel64.isNotEmpty() && juce::roundToInt (state.getRawParameterValue (ParamID::engine)->load()) == Engine::Resynth)
+        xml.setAttribute ("resynthModel", resynthModel64);
 
     auto folder = userPresetFolder();
     folder.createDirectory();
@@ -590,7 +657,14 @@ bool NebulaAudioProcessor::loadUserPreset (const juce::String& name)
             tables.setUser (t);
             tables.hasCustomUser = true;
         }
+    if (xml->hasAttribute ("resynthModel"))
+        if (auto m = ResynthModel::fromBase64 (xml->getStringAttribute ("resynthModel")))
+        {
+            voiceCtx.models.set (m);
+            resynthModel64 = xml->getStringAttribute ("resynthModel");
+        }
     state.state.setProperty ("preset", -1, nullptr);
+    markReference();
     return true;
 }
 
@@ -605,7 +679,8 @@ void NebulaAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
     if (tables.hasCustomUser)
         if (auto t = tables.get (WavetableBank::userIndex))
             copy.setProperty ("userTable", t->toBase64(), nullptr);
-    copy.setProperty ("version", 2, nullptr);
+    copy.setProperty ("version", 3, nullptr);
+    if (resynthModel64.isNotEmpty()) copy.setProperty ("resynthModel", resynthModel64, nullptr);
     if (auto xml = copy.createXml())
         copyXmlToBinary (*xml, destData);
 }
@@ -618,10 +693,16 @@ void NebulaAudioProcessor::setStateInformation (const void* data, int sizeInByte
     auto tree = juce::ValueTree::fromXml (*xml);
     const auto embedded = tree["sampleEmbedded"].toString();
     const auto userTable = tree["userTable"].toString();
+    const auto model64 = tree["resynthModel"].toString();
+    tree.removeProperty ("resynthModel", nullptr);
     tree.removeProperty ("sampleEmbedded", nullptr);
     tree.removeProperty ("userTable", nullptr);
     state.replaceState (tree);
     garden.loadFrom (state.state);
+
+    // Modelo de resíntesis
+    if (model64.isNotEmpty())
+        if (auto m = ResynthModel::fromBase64 (model64)) { voiceCtx.models.set (m); resynthModel64 = model64; }
 
     // Tabla de onda del usuario
     if (userTable.isNotEmpty())
@@ -660,6 +741,16 @@ void NebulaAudioProcessor::setStateInformation (const void* data, int sizeInByte
     voiceCtx.regionStart = rs;
     voiceCtx.regionEnd = juce::jmax (rs + 0.005f, re);
     voiceCtx.rootOffset = (float) state.state.getProperty ("rootOffset", 0.0f);
+    if (auto smp = sampleSource.get())
+    {
+        const int n = smp->length();
+        const int a = (int) (voiceCtx.regionStart.load() * (float) n), b = juce::jmax (a + 1, (int) (voiceCtx.regionEnd.load() * (float) n));
+        float pk = 1.0e-6f;
+        for (int i = a; i < b && i < n; ++i) pk = juce::jmax (pk, std::abs (smp->data()[i]));
+        voiceCtx.abGain = 1.0f / pk;
+    }
+    markReference();
+    undoManager.clearUndoHistory();
 }
 
 juce::AudioProcessorEditor* NebulaAudioProcessor::createEditor()

@@ -6,10 +6,12 @@
 #include "Views.h"
 #include "SampleEditor.h"
 #include "Panels.h"
+#include "NeuralUI.h"
 
 // Contenido de la ventana (tamaño de diseño fijo; se escala con el zoom)
 class NebulaContent : public juce::Component, private juce::Timer
 {
+    // (la locura se calcula aquí 20 veces por segundo y anima toda la interfaz)
 public:
     static constexpr int designW = 1180, designH = 780;
 
@@ -20,6 +22,7 @@ public:
     std::function<void (float)> onZoom;
     void showTab (int tab);
     void setZoomChoice (float z);
+    void mouseDown (const juce::MouseEvent&) override;   // cada clic abre un paso nuevo de "deshacer"
 
 private:
     void timerCallback() override;
@@ -28,16 +31,25 @@ private:
     void savePreset();
 
     NebulaAudioProcessor& proc;
-    std::array<std::unique_ptr<IconButton>, 3> tabs;
+    std::array<std::unique_ptr<IconButton>, 4> tabs;
     juce::ComboBox presetBox, zoomBox;
-    IconButton prevButton { "", Icons::back(), "Preset anterior" }, nextButton { "", Icons::play(), "Preset siguiente" },
+    IconButton prevButton { "", Icons::chevronLeft(), "Sonido anterior" }, nextButton { "", Icons::chevronRight(), "Sonido siguiente" },
                saveButton { "", Icons::save(), "Guardar tu sonido como preset" },
                folderButton { "", Icons::folder(), "Abrir la carpeta de tus presets" },
-               recipeButton { "Receta", Icons::recipe(), "Como esta hecho este sonido, paso a paso" };
+               recipeButton { "", Icons::recipe(), "La receta: como esta hecho este sonido, paso a paso" },
+               browseButton { "", Icons::list(), "Explorar sonidos por categoria, buscar y favoritos" },
+               undoButton { "", Icons::undo(), "Deshacer" },
+               redoButton { "", Icons::redo(), "Rehacer" };
 
     GardenView garden;
     EditView edit;
     ModView mod;
+    FxView fxView;
+    MacroStrip macros;
+    PresetBrowser browser;
+    NeuralBackground neural;
+    double lastTick = 0.0;
+    int bgCounter = 0;
     SampleEditor sampleEditor;
     DrawPanel drawPanel;
     RecipePanel recipePanel;

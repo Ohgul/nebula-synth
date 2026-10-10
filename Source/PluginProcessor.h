@@ -9,6 +9,9 @@
 #include "SoundProfile.h"
 #include "Recipe.h"
 #include "Cleaner.h"
+#include "ResynthBuilder.h"
+#include "FxChain.h"
+#include "Exporter.h"
 
 class NebulaAudioProcessor : public juce::AudioProcessor,
                              private juce::AsyncUpdater
@@ -49,12 +52,32 @@ public:
     bool saveUserPreset (const juce::String& name);
     bool loadUserPreset (const juce::String& name);
 
+    juce::UndoManager undoManager;         // deshacer / rehacer
     juce::AudioProcessorValueTreeState state;
     juce::MidiKeyboardState keyboardState; // teclado en pantalla
     WavetableBank tables;
     Garden garden;                         // modo Jardín (variaciones)
 
     static constexpr int auditionNote = 60;
+    // Todo sample se afina a C: la tecla C más cercana a su nota suena en C
+    int homeKey() const
+    {
+        auto s = sampleSource.get();
+        if (s == nullptr || ! s->hasPitch) return 60;
+        return juce::jlimit (24, 96, 12 * juce::roundToInt ((s->rootNote + rootOffset()) / 12.0f));
+    }
+
+    // ---- v3: resíntesis, A/B, locura ----
+    std::shared_ptr<const ResynthModel> resynthModel() const { return voiceCtx.models.get(); }
+    void setAB (bool original) { voiceCtx.abOriginal = original; }
+    bool isAB() const { return voiceCtx.abOriginal.load(); }
+    float computeCraziness();
+    // Exportar (para arrastrar a Ableton). Devuelven el archivo o un File vacío.
+    juce::File exportMidi();
+    juce::File exportAudio();
+    juce::File exportWavetable();            // 0..1: qué tan lejos y qué tan "loco" está el sonido
+    void markReference();                // el sonido actual pasa a ser la referencia (locura 0)
+    std::atomic<float> craziness { 0.0f };
 
     // ---- Sample ----
     SampleSource sampleSource;
@@ -134,6 +157,13 @@ private:
     juce::String sampleEmbedded64;
 
     std::atomic<bool> previewing { false };
+    FxChain fx;
+    std::unique_ptr<juce::dsp::Oversampling<float>> os2, os4;
+    int currentFactor = 1, maxBlock = 512;
+    float dcX[2] {}, dcY[2] {};
+    juce::MidiBuffer scaledMidi;
+    Genome reference;
+    juce::String resynthModel64;
     SampleSource previewOther;
     static std::shared_ptr<const SampleData> withDeepAnalysis (std::shared_ptr<const SampleData> s);
     void applyResynthesis (const SoundProfile&, ResynthData&);

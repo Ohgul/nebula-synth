@@ -23,7 +23,8 @@ public:
 
 private:
     void timerCallback() override;
-    bool samplerEngine() const { return getParamValue (proc.state, ParamID::engine) > 0.5f; }
+    bool samplerEngine() const { return juce::roundToInt (getParamValue (proc.state, ParamID::engine)) == Engine::Sample; }
+    bool resynthEngine() const { return juce::roundToInt (getParamValue (proc.state, ParamID::engine)) == Engine::Resynth; }
     void updateVisibility();
     NebKnob& knob (const char* id, const char* name, const char* tip);
 
@@ -32,6 +33,17 @@ private:
 
     // Motor
     IconChoice engine;
+
+    // Resíntesis
+    NebKnob *rsSpeed, *rsHarm, *rsPartials, *rsNoise, *rsTone, *rsStretch, *rsWidth;
+    IconToggle rsPitch;
+    IconButton rsRecreate { "Recrear de nuevo", Icons::wand(), "Vuelve a analizar el sample (por ejemplo, despues de cambiar la seccion)" };
+    juce::Rectangle<int> rResynth;
+
+    // Encendidos
+    IconToggle osc1Power, osc2Power, subPower, noisePower, uniPower, f1Power, grainsPower, mpeToggle;
+    ParamCombo quality;
+    NebKnob* analogKnob = nullptr;
 
     // Osciladores
     IconChoice wave1, wave2;
@@ -76,7 +88,7 @@ private:
     NebKnob *voices, *glide, *bend, *vel, *volume;
 
     juce::Rectangle<int> rOsc1, rOsc2, rSample, rMix, rUni, rFilter, rAmp, rVoice, rEngine;
-    bool lastSampler = false;
+    bool lastSampler = false, lastResynth = false;
     int layoutSig = -1;
 };
 

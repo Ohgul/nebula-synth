@@ -37,6 +37,8 @@ public:
         synth.addVoice (new SynthVoice (ctx));
     }
 
+    void setModel (std::shared_ptr<const ResynthModel> m) { ctx.models.set (std::move (m)); }
+
     void setGenome (const Genome& g)
     {
         for (size_t i = 0; i < genomeParamList.size() && i < g.genes.size(); ++i)
@@ -44,6 +46,31 @@ public:
                 values[(size_t) genomeIndex[i]] = genomeParamList[i]->convertFrom0to1 (g.genes[i]);
         // Interpretación fija para la búsqueda: una voz, sin glide
         set (ParamID::polyMode, 0.0f); set (ParamID::voiceCount, 1.0f); set (ParamID::glide, 0.0f);
+    }
+
+    // Igual que render() pero en estéreo (para exportar audio)
+    void renderStereo (juce::AudioBuffer<float>& out, int note, int holdSamples, int totalSamples, double sr)
+    {
+        if (sr != currentRate)
+        {
+            currentRate = sr;
+            synth.setCurrentPlaybackSampleRate (sr);
+            if (auto* v = dynamic_cast<SynthVoice*> (synth.getVoice (0))) v->prepare (sr);
+        }
+        synth.allNotesOff (0, false);
+        ctx.lastNote = -1.0f;
+        out.setSize (2, totalSamples);
+        out.clear();
+        constexpr int block = 512;
+        for (int pos = 0; pos < totalSamples; pos += block)
+        {
+            const int n = juce::jmin (block, totalSamples - pos);
+            juce::MidiBuffer midi;
+            if (pos == 0) midi.addEvent (juce::MidiMessage::noteOn (1, note, (juce::uint8) 100), 0);
+            if (holdSamples >= pos && holdSamples < pos + n) midi.addEvent (juce::MidiMessage::noteOff (1, note), holdSamples - pos);
+            ctx.blockTime = pos / sr;
+            synth.renderNextBlock (out, midi, pos, n);
+        }
     }
 
     void render (std::vector<float>& out, int note, int holdSamples, int totalSamples, double sr)
@@ -137,7 +164,7 @@ namespace ImitationTools
     }
 
     // Distancia del patch al objetivo, con castigo si la nota no es la misma
-    inline float distance (OfflineSynth& offline, SoundAnalyser& analyser, const Target& t, const Genome& g, std::vector<float>& audio)
+    inline float distance (OfflineSynth& offline, SoundAnalyser& analyser, const Target& t, const Genome& g, std::vector<float>& audio, bool pitchCheck = true)
     {
         constexpr double sr = 44100.0;
         const int total = (int) (t.lengthS * sr) + 1024;
@@ -150,7 +177,7 @@ namespace ImitationTools
         const auto got = analyser.analyse (audio.data(), (int) audio.size(), sr, t.lengthS);
         float d = SoundAnalyser::distance (t.features, got);
 
-        if (t.pitched)
+        if (t.pitched && pitchCheck)
         {
             const int win = juce::jmin ((int) audio.size() / 2, (int) (sr * 0.1));
             const int start = juce::jmin ((int) audio.size() - win - 1, (int) (sr * juce::jmin (0.15, t.lengthS * 0.3)));
@@ -166,12 +193,15 @@ namespace ImitationTools
         return d;
     }
 
-    inline float similarity (OfflineSynth& offline, const Genome& g, const SampleData& smp, float rStart, float rEnd, float rootFix)
+    inline float similarity (OfflineSynth& offline, const Genome& g, const SampleData& smp, float rStart, float rEnd, float rootFix,
+                             float exactRoot = -1.0f)
     {
         SoundAnalyser analyser;
-        const auto t = prepare (analyser, smp, rStart, rEnd, rootFix);
+        auto t = prepare (analyser, smp, rStart, rEnd, rootFix);
+        // La resíntesis ya está afinada por construcción: se compara en su raíz (sin castigo de tono)
+        if (exactRoot > 0.0f) t.note = juce::jlimit (12, 115, juce::roundToInt (exactRoot));
         std::vector<float> audio;
-        return SoundAnalyser::similarity (distance (offline, analyser, t, g, audio));
+        return SoundAnalyser::similarity (distance (offline, analyser, t, g, audio, exactRoot <= 0.0f));
     }
 }
 

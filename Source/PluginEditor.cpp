@@ -5,15 +5,16 @@ using namespace NebulaColours;
 
 //==============================================================================
 NebulaContent::NebulaContent (NebulaAudioProcessor& p)
-    : proc (p), garden (p), edit (p), mod (p), sampleEditor (p), drawPanel (p), recipePanel (p), cleanerPanel (p),
+    : proc (p), garden (p), edit (p), mod (p), fxView (p), macros (p), browser (p), sampleEditor (p), drawPanel (p), recipePanel (p), cleanerPanel (p),
       keyboard (p.keyboardState, juce::MidiKeyboardComponent::horizontalKeyboard)
 {
-    const char* names[] { "Jardin", "Editar", "Modulacion" };
-    const juce::Path icons[] { Icons::garden(), Icons::sliders(), Icons::modulation() };
-    const char* tips[] { "Jardin: cultiva variaciones del sonido y arrastra audios",
-                         "Editar: osciladores, filtros, volumen y voces",
-                         "Modulacion: envolventes, LFOs y matriz" };
-    for (int i = 0; i < 3; ++i)
+    const char* names[] { "Cerebro", "Editar", "Modulacion", "Efectos" };
+    const juce::Path icons[] { Icons::seed(), Icons::sliders(), Icons::modulation(), Icons::sparkle() };
+    const char* tips[] { "Cerebro: suelta un audio, recrealo y haz que tu sonido evolucione",
+                         "Editar: osciladores o resintesis, filtros, volumen y voces",
+                         "Modulacion: envolventes, LFOs y matriz",
+                         "Efectos: EQ, compresor, chorus, delay y reverb" };
+    for (int i = 0; i < 4; ++i)
     {
         tabs[(size_t) i] = std::make_unique<IconButton> (names[i], icons[i], tips[i]);
         tabs[(size_t) i]->horizontal = true;
@@ -29,10 +30,14 @@ NebulaContent::NebulaContent (NebulaAudioProcessor& p)
     nextButton.onClick = [this] { const int n = presetBox.getNumItems(); if (n > 0) presetBox.setSelectedItemIndex ((juce::jmax (0, presetBox.getSelectedItemIndex()) + 1) % n); };
     saveButton.onClick = [this] { savePreset(); };
     folderButton.onClick = [] { auto f = NebulaAudioProcessor::userPresetFolder(); f.createDirectory(); f.revealToUser(); };
-    for (auto* b : { &prevButton, &nextButton, &saveButton, &folderButton, &recipeButton }) addAndMakeVisible (b);
-    recipeButton.horizontal = true;
+    for (auto* b : { &prevButton, &nextButton, &saveButton, &recipeButton, &browseButton, &undoButton, &redoButton }) addAndMakeVisible (b);
     recipeButton.colour = accent2;
     recipeButton.onClick = [this] { recipePanel.open(); };
+    browseButton.onClick = [this] { browser.open(); };
+    browser.onLoaded = [this] { rebuildPresetMenu(); };
+    undoButton.onClick = [this] { proc.undoManager.undo(); };
+    redoButton.onClick = [this] { proc.undoManager.redo(); };
+    juce::ignoreUnused (folderButton);
 
     zoomBox.addItemList ({ "80 %", "90 %", "100 %", "115 %", "130 %" }, 1);
     zoomBox.setSelectedId (3, juce::dontSendNotification);
@@ -43,6 +48,9 @@ NebulaContent::NebulaContent (NebulaAudioProcessor& p)
     addChildComponent (garden);
     addChildComponent (edit);
     addChildComponent (mod);
+    addChildComponent (fxView);
+    addAndMakeVisible (macros);
+    addChildComponent (browser);
     addChildComponent (sampleEditor);
     addChildComponent (drawPanel);
     addChildComponent (recipePanel);
@@ -69,7 +77,8 @@ NebulaContent::NebulaContent (NebulaAudioProcessor& p)
 
     setSize (designW, designH);
     showTab (0);
-    startTimerHz (2);
+    addMouseListener (this, true);
+    startTimerHz (20);
 }
 
 void NebulaContent::setZoomChoice (float z)
@@ -85,7 +94,14 @@ void NebulaContent::showTab (int tab)
     garden.setVisible (tab == 0);
     edit.setVisible (tab == 1);
     mod.setVisible (tab == 2);
-    for (int i = 0; i < 3; ++i) tabs[(size_t) i]->setToggleState (i == tab, juce::dontSendNotification);
+    fxView.setVisible (tab == 3);
+    for (int i = 0; i < 4; ++i) tabs[(size_t) i]->setToggleState (i == tab, juce::dontSendNotification);
+    repaint();
+}
+
+void NebulaContent::mouseDown (const juce::MouseEvent&)
+{
+    proc.undoManager.beginNewTransaction();
 }
 
 void NebulaContent::rebuildPresetMenu()
@@ -139,29 +155,50 @@ void NebulaContent::savePreset()
 
 void NebulaContent::timerCallback()
 {
-    // Si cambiaron los presets de usuario en disco (por ejemplo desde otra instancia)
-    if (proc.userPresetNames() != userPresets) rebuildPresetMenu();
+    const double now = juce::Time::getMillisecondCounterHiRes();
+    const float dt = lastTick > 0.0 ? (float) juce::jlimit (0.0, 0.2, (now - lastTick) / 1000.0) : 0.05f;
+    lastTick = now;
 
-    // Si el preset cambió desde fuera (proyecto abierto, otra ventana), mostrarlo
-    const int idx = proc.getPresetIndex();
-    if (! presetBox.isPopupActive())
+    // Locura: qué tan lejos y qué tan loco está el sonido → anima toda la interfaz
+    const float before = Neural::level();
+    const float c = proc.computeCraziness();
+    Neural::craziness = c;
+    neural.step (dt, c, juce::jmin (1.0f, proc.outputLevel.load() * 3.0f));
+    undoButton.setEnabled (proc.undoManager.canUndo());
+    redoButton.setEnabled (proc.undoManager.canRedo());
+
+    // El fondo se repinta seguido en el Cerebro; en las demás pestañas, más lento (ahorra CPU)
+    ++bgCounter;
+    const bool calm = c < 0.08f && std::abs (c - before) < 0.002f;
+    if (currentTab == 0 || (! calm && bgCounter % 3 == 0) || bgCounter % 10 == 0)
+        repaint();
+
+    if (bgCounter % 10 == 0)
     {
-        if (idx >= 0 && presetBox.getSelectedId() != idx + 1)
-            presetBox.setSelectedId (idx + 1, juce::dontSendNotification);
-        else if (idx < 0 && presetBox.getSelectedId() > 0 && presetBox.getSelectedId() < 1000)
-            presetBox.setText ("(sonido propio)", juce::dontSendNotification);
+        if (proc.userPresetNames() != userPresets) rebuildPresetMenu();
+        const int idx = proc.getPresetIndex();
+        if (! presetBox.isPopupActive())
+        {
+            if (idx >= 0 && presetBox.getSelectedId() != idx + 1)
+                presetBox.setSelectedId (idx + 1, juce::dontSendNotification);
+            else if (idx < 0 && presetBox.getSelectedId() > 0 && presetBox.getSelectedId() < 1000)
+                presetBox.setText ("(sonido propio)", juce::dontSendNotification);
+        }
     }
 }
 
 void NebulaContent::paint (juce::Graphics& g)
 {
-    g.fillAll (background);
-    g.setGradientFill (juce::ColourGradient (accent, 18.0f, 0.0f, accent2, 170.0f, 0.0f, false));
+    neural.paint (g, getLocalBounds().toFloat());
+    // Logo: se calienta con la locura
+    g.setGradientFill (juce::ColourGradient (Neural::hot (accent), 18.0f, 0.0f, Neural::hot (accent2, 0.1f), 170.0f, 0.0f, false));
     g.setFont (juce::FontOptions (26.0f, juce::Font::bold));
-    g.drawText ("NEBULA", 18, 10, 150, 34, juce::Justification::centredLeft);
+    const float c = Neural::level();
+    const float jx = c > 0.5f ? (float) (juce::Random::getSystemRandom().nextFloat() - 0.5f) * 4.0f * (c - 0.5f) : 0.0f;
+    g.drawText ("NEBULA", juce::Rectangle<float> (18.0f + jx, 10.0f, 150.0f, 34.0f), juce::Justification::centredLeft);
     g.setColour (textDim);
     g.setFont (juce::FontOptions (10.0f));
-    g.drawText ("v2.1", 140, 12, 40, 14, juce::Justification::centredLeft);
+    g.drawText ("v3", 140, 12, 30, 14, juce::Justification::centredLeft);
 }
 
 void NebulaContent::resized()
@@ -169,33 +206,41 @@ void NebulaContent::resized()
     auto r = getLocalBounds().reduced (14, 0);
     auto header = r.removeFromTop (54);
     header.removeFromLeft (160);
-    auto tabArea = header.removeFromLeft (390).withSizeKeepingCentre (390, 34);
-    for (auto& t : tabs) t->setBounds (tabArea.removeFromLeft (128).reduced (2, 0));
+    auto tabArea = header.removeFromLeft (452).withSizeKeepingCentre (452, 34);
+    for (auto& t : tabs) t->setBounds (tabArea.removeFromLeft (113).reduced (2, 0));
 
     auto right = header.withSizeKeepingCentre (header.getWidth(), 30);
-    zoomBox.setBounds (right.removeFromRight (78));
-    right.removeFromRight (10);
-    recipeButton.setBounds (right.removeFromRight (96));
-    right.removeFromRight (10);
-    folderButton.setBounds (right.removeFromRight (30));
-    right.removeFromRight (4);
-    saveButton.setBounds (right.removeFromRight (30));
+    zoomBox.setBounds (right.removeFromRight (74));
     right.removeFromRight (8);
-    nextButton.setBounds (right.removeFromRight (30));
-    presetBox.setBounds (right.removeFromRight (200).reduced (4, 0));
-    prevButton.setBounds (right.removeFromRight (30));
+    recipeButton.setBounds (right.removeFromRight (30));
+    right.removeFromRight (8);
+    saveButton.setBounds (right.removeFromRight (30));
+    right.removeFromRight (3);
+    browseButton.setBounds (right.removeFromRight (30));
+    right.removeFromRight (3);
+    nextButton.setBounds (right.removeFromRight (26));
+    presetBox.setBounds (right.removeFromRight (170).reduced (3, 0));
+    prevButton.setBounds (right.removeFromRight (26));
+    right.removeFromRight (8);
+    redoButton.setBounds (right.removeFromRight (28));
+    right.removeFromRight (2);
+    undoButton.setBounds (right.removeFromRight (28));
 
-    keyboard.setBounds (r.removeFromBottom (74).withTrimmedBottom (12));
+    keyboard.setBounds (r.removeFromBottom (58).withTrimmedBottom (8));
     keyboard.setKeyWidth ((float) keyboard.getWidth() / 36.0f);
-    r.removeFromBottom (10);
+    r.removeFromBottom (6);
+    macros.setBounds (r.removeFromBottom (86));
+    r.removeFromBottom (8);
 
     garden.setBounds (r);
     edit.setBounds (r);
     mod.setBounds (r);
-    sampleEditor.setBounds (r.reduced (40, 50));
-    drawPanel.setBounds (r.reduced (120, 70));
-    recipePanel.setBounds (r.reduced (150, 16));
-    cleanerPanel.setBounds (r.reduced (24, 16));
+    fxView.setBounds (r);
+    sampleEditor.setBounds (r.reduced (40, 30));
+    drawPanel.setBounds (r.reduced (120, 50));
+    recipePanel.setBounds (r.reduced (150, 0).withTrimmedBottom (-60));
+    cleanerPanel.setBounds (r.reduced (24, 0).withTrimmedBottom (-40));
+    browser.setBounds (r.reduced (200, 10));
 }
 
 //==============================================================================

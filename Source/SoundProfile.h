@@ -1,5 +1,6 @@
 #pragma once
 #include <juce_dsp/juce_dsp.h>
+#include <map>
 #include "SampleData.h"
 #include "Parameters.h"
 
@@ -48,6 +49,8 @@ struct SoundProfile
 struct ResynthData
 {
     std::vector<std::vector<float>> cycles;   // cuadros de un ciclo (Wavetable::frameSize)
+    std::vector<float> times, pitchCents, noiseRms, localHz;   // por cuadro
+    float peakCycle = 1.0f;
     float scanCurve = 0.3f;                   // curva de la Env 3 que recorre la tabla
     float noiseAmount = 0.0f;                 // cantidad de la matriz Env 2 -> Ruido
     float noiseColor = 1.0f;
@@ -185,7 +188,7 @@ namespace SoundProfiler
     // Análisis completo + datos para la resíntesis
     // =======================================================================
     inline SoundProfile analyse (const SampleData& smp, float regionStart, float regionEnd, float rootOffset,
-                                 ResynthData* resynth = nullptr, int numFrames = 64)
+                                 ResynthData* resynth = nullptr, int numFrames = 64, double maxScan = 5.0)
     {
         SoundProfile p;
         const int full = smp.length();
@@ -223,7 +226,7 @@ namespace SoundProfiler
             scanEndS = rel * env.hop;
         }
         else p.releaseS = 0.25f;
-        p.scanS = (float) juce::jlimit (0.05, 5.0, scanEndS);
+        p.scanS = (float) juce::jlimit (0.05, maxScan, scanEndS);
 
         // ---- Tono ----
         const auto contour = pitchContour (x + (int) (p.onsetS * sr), n - (int) (p.onsetS * sr), sr, env.peak * 0.06f);
@@ -243,10 +246,30 @@ namespace SoundProfiler
             std::vector<std::pair<float, float>> stable;
             for (auto& v : notes) if (std::abs (v.first - med) < 0.5f) { stableW += v.second; stable.push_back (v); }
 
-            if (stableW / pitchedW >= 0.6)
+            // ¿Es una frase? Sólo si hay al menos 2 notas distintas que duran de verdad (>= 80 ms cada una)
+            bool phrase = false;
+            float modeNote = med;
             {
+                std::map<int, double> durByNote;   // segundos por nota redondeada
+                for (size_t i = 0; i < contour.note.size(); ++i)
+                    if (contour.note[i] > 0.0f && contour.weight[i] >= env.peak * 0.06f)
+                        durByNote[juce::roundToInt (contour.note[i])] += contour.hop;
+                int distinct = 0; double best = 0.0;
+                for (auto& [nt, d] : durByNote)
+                {
+                    if (d >= 0.08) ++distinct;
+                    if (d > best) { best = d; modeNote = (float) nt; }
+                }
+                phrase = distinct >= 2 && p.durationS >= 0.8f && stableW / pitchedW < 0.6;
+            }
+
+            if (! phrase)
+            {
+                // Una sola nota: la que más dura (con sus cents)
+                std::vector<std::pair<float, float>> near;
+                for (auto& v : notes) if (std::abs (v.first - modeNote) < 0.5f) near.push_back (v);
                 p.pitched = true;
-                p.note = weightedMedian (stable);
+                p.note = stableW / pitchedW >= 0.6 ? weightedMedian (stable) : (near.empty() ? med : weightedMedian (near));
             }
             else
             {
@@ -352,6 +375,12 @@ namespace SoundProfiler
             {
                 const int ci = juce::jlimit (0, juce::jmax (0, (int) contour.note.size() - 1), (int) ((t - p.onsetS) / contour.hop));
                 if (! contour.note.empty() && contour.note[(size_t) ci] > 0.0f) f0 = 440.0 * std::exp2 ((contour.note[(size_t) ci] - 69.0) / 12.0);
+            }
+
+            if (resynth != nullptr)
+            {
+                resynth->localHz.push_back ((float) f0);
+                resynth->pitchCents.push_back (p.pitched ? (float) juce::jlimit (-2400.0, 2400.0, 1200.0 * std::log2 (f0 / f0Global)) : 0.0f);
             }
 
             // Re-muestrea 4 periodos a L puntos: el armónico k cae justo en el bin 4k
@@ -494,6 +523,9 @@ namespace SoundProfiler
         {
             float peakCycle = 1.0e-9f;
             for (auto& c : resynth->cycles) for (auto v : c) peakCycle = juce::jmax (peakCycle, std::abs (v));
+            resynth->peakCycle = peakCycle;
+            resynth->times = frameTimes;
+            resynth->noiseRms = noiseRms;
             const float nMax = *std::max_element (noiseRms.begin(), noiseRms.end());
             const bool useNoise = p.noiseRatio > 0.03f && ! p.inharmonic && nMax > 0.0f;
             constexpr float whiteRms = 1.2f * 0.57735f;   // ruido del sinte con cantidad 1

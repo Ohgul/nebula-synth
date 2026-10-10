@@ -68,7 +68,7 @@ int main (int argc, char** argv)
     // --- Jardín: animación al germinar ---
     noteOn (48); noteOn (55);
     pump (400);
-    proc->garden.selected = -1; pump (60); click ("Germinar");
+    proc->garden.selected = -1; pump (60); click ("Evolucionar");
     {
         const int times[] { 0, 90, 180, 300, 600, 1100 };
         std::vector<juce::Image> frames;
@@ -96,7 +96,7 @@ int main (int argc, char** argv)
         pump (300);
         juce::ignoreUnused (c);
     }
-    click ("Plantar");
+    click ("Usar esta");
     pump (150);
     save (shot (1.0f), "ui_jardin_plantando.png");
     pump (1200);
@@ -125,10 +125,10 @@ int main (int argc, char** argv)
         pump (100);
 
         // Recrear (resíntesis) y la receta
-        click ("Recrear sonido");
+        click ("RECREAR");
         pump (1300);
         save (shot (1.0f), "ui_recreado.png");
-        click ("Ver la receta");
+        click ("Como se hizo?");
         pump (300);
         save (shot (1.0f), "ui_receta.png");
         click ("Cerrar");
@@ -147,7 +147,13 @@ int main (int argc, char** argv)
         if (auto* cp = first ((CleanerPanel*) nullptr)) cp->setVisible (false);
         pump (100);
 
-        click ("Usar el sample");
+        // Editar en modo Resíntesis (lo que dejó RECREAR)
+        click ("Editar");
+        pump (300);
+        save (shot (1.0f), "ui_editar_resintesis.png");
+        click ("Cerebro");
+        pump (100);
+        { auto* p = proc->state.getParameter (ParamID::engine); p->setValueNotifyingHost (p->convertTo0to1 (1.0f)); }
         { auto* p = proc->state.getParameter (ParamID::smpGrainAmt); p->setValueNotifyingHost (0.4f); }
         pump (200);
     }
@@ -187,9 +193,32 @@ int main (int argc, char** argv)
     save (shot (1.0f), "ui_modulacion.png");
     noteOff (60);
 
+    // --- Efectos ---
+    click ("Efectos");
+    { auto* p = proc->state.getParameter (ParamID::fxRevOn); p->setValueNotifyingHost (1.0f); }
+    { auto* p = proc->state.getParameter (ParamID::fxDelayOn); p->setValueNotifyingHost (1.0f); }
+    pump (300);
+    save (shot (1.0f), "ui_efectos.png");
+
+    // --- Locura: la interfaz enloquece ---
+    click ("Cerebro");
+    { auto* p = proc->state.getParameter (ParamID::macroChaos); p->setValueNotifyingHost (0.9f); }
+    noteOn (48); noteOn (55);
+    pump (1500);
+    save (shot (1.0f), "ui_cerebro_locura.png");
+    noteOff (48); noteOff (55);
+    { auto* p = proc->state.getParameter (ParamID::macroChaos); p->setValueNotifyingHost (0.0f); }
+    pump (1500);
+
+    // --- Navegador de presets ---
+    if (auto* b = first ((PresetBrowser*) nullptr)) b->open();
+    pump (200);
+    save (shot (1.0f), "ui_presets.png");
+    if (auto* b = first ((PresetBrowser*) nullptr)) b->setVisible (false);
+
     // --- Zoom ---
     if (auto* content = first ((NebulaContent*) nullptr)) if (content->onZoom) content->onZoom (0.8f);
-    click ("Jardin");
+    click ("Cerebro");
     pump (300);
     save (shot (1.0f), "ui_zoom_80.png");
     std::printf ("tamano de ventana con zoom 80%%: %dx%d\n", ed->getWidth(), ed->getHeight());

@@ -21,7 +21,7 @@ public:
         return id == ParamID::master || id == ParamID::polyMode || id == ParamID::voiceCount
             || id == ParamID::glide || id == ParamID::bendRange || id == ParamID::velSens
             || id == ParamID::smpPlayMode || id == ParamID::smpBeats
-            || id == ParamID::lfoOn || id == ParamID::lfo2On;
+            || id == ParamID::lfoOn || id == ParamID::lfo2On || id == ParamID::quality || id == ParamID::mpeOn;
     }
 
     explicit GenomeOps (const juce::AudioProcessor& proc, juce::int64 seed = juce::Time::currentTimeMillis())
@@ -60,13 +60,15 @@ public:
             g.genes[(size_t) i] = params[(size_t) i]->convertTo0to1 (realValue);
     }
 
-    bool isSamplerGenome (const Genome& g) const { return real (g, ParamID::engine) > 0.5f; }
+    int engineOf (const Genome& g) const { return juce::roundToInt (real (g, ParamID::engine)); }
+    bool isSamplerGenome (const Genome& g) const { return engineOf (g) == Engine::Sample; }
 
     //==========================================================================
     Genome mutate (const Genome& parent, float amt, bool lockEnv, bool lockFilter = false)
     {
         Genome g = parent;
-        const bool sampler = isSamplerGenome (g);
+        const int engine = engineOf (g);
+        const bool sampler = engine == Engine::Sample;
 
         for (size_t i = 0; i < params.size(); ++i)
         {
@@ -77,8 +79,11 @@ public:
             if (id == ParamID::engine) continue;
             if (lockEnv && isEnvelopeGene (id)) continue;
             if (lockFilter && isFilterGene (id)) continue;
-            if (sampler && isOscillatorGene (id)) continue;      // en modo sample no tienen efecto
+            if (engine != Engine::Synth && isOscillatorGene (id)) continue;   // sin efecto fuera del motor Sinte
             if (! sampler && isSampleGene (id)) continue;
+            if (engine != Engine::Resynth && id.startsWith ("rs")) continue;
+            // Decisiones del usuario: encendidos, macros, efectos y la curva de tono no mutan
+            if (id.endsWith ("On") || id.startsWith ("macro") || id.startsWith ("fx") || id == ParamID::rsPitch) continue;
 
             auto chance = [&] (float x) { return rng.nextFloat() < amt * x; };
             auto setIdx = [&] (float realValue) { v = p->convertTo0to1 (realValue); };
