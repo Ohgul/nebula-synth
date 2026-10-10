@@ -12,7 +12,7 @@ public:
     NeuralBackground()
     {
         juce::Random r (2026);
-        nodes.resize (70);
+        nodes.resize (38);
         for (auto& n : nodes)
         {
             n.x = r.nextFloat(); n.y = r.nextFloat();
@@ -34,9 +34,9 @@ public:
             n.x = juce::jlimit (0.0f, 1.0f, n.x); n.y = juce::jlimit (0.0f, 1.0f, n.y);
         }
         // Disparos: pulsos que viajan por las conexiones (más con sonido y con locura)
-        const float rate = 0.6f + 8.0f * craziness + 10.0f * audioLevel;
+        const float rate = 0.25f + 4.0f * craziness + 5.0f * audioLevel;
         fireAcc += rate * dt;
-        while (fireAcc > 1.0f && pulses.size() < 60)
+        while (fireAcc > 1.0f && pulses.size() < 24)
         {
             fireAcc -= 1.0f;
             const int a = rng.nextInt ((int) nodes.size());
@@ -71,21 +71,21 @@ public:
             return juce::Point<float> (area.getX() + area.getWidth() * (n.x + jit * std::sin (time * 13.0f + n.phase)),
                                        area.getY() + area.getHeight() * (n.y + jit * std::cos (time * 11.0f + n.phase * 1.7f)));
         };
-        const float maxD = 0.13f + 0.12f * c;
+        const float maxD = 0.11f + 0.08f * c;
         const auto lineCol = Neural::hot (accent.withAlpha (1.0f));
         for (size_t i = 0; i < nodes.size(); ++i)
             for (size_t j = i + 1; j < nodes.size(); ++j)
             {
                 const float d = std::hypot (nodes[i].x - nodes[j].x, (nodes[i].y - nodes[j].y) * 0.66f);
                 if (d > maxD) continue;
-                g.setColour (lineCol.withAlpha ((1.0f - d / maxD) * (0.07f + 0.18f * c)));
+                g.setColour (lineCol.withAlpha ((1.0f - d / maxD) * (0.035f + 0.10f * c)));
                 g.drawLine ({ pos (nodes[i]), pos (nodes[j]) }, 0.8f + c);
             }
         for (auto& n : nodes)
         {
             const auto p = pos (n);
-            const float r = 1.4f + 1.2f * (0.5f + 0.5f * std::sin (time * 2.0f + n.phase)) + 2.0f * level;
-            g.setColour (Neural::hot (accent2).withAlpha (0.25f + 0.3f * c));
+            const float r = 1.0f + 0.7f * (0.5f + 0.5f * std::sin (time * 2.0f + n.phase)) + 1.0f * level;
+            g.setColour (Neural::hot (accent2).withAlpha (0.18f + 0.22f * c));
             g.fillEllipse (p.x - r, p.y - r, r * 2.0f, r * 2.0f);
         }
         for (auto& pl : pulses)
@@ -96,9 +96,9 @@ public:
             g.fillEllipse (p.x - 2.5f, p.y - 2.5f, 5.0f, 5.0f);
         }
         // Mucha locura: glitches (franjas desplazadas)
-        if (c > 0.45f)
+        if (c > 0.75f)
         {
-            const int n = (int) ((c - 0.45f) * 14.0f);
+            const int n = (int) ((c - 0.75f) * 8.0f);
             juce::Random r ((juce::int64) (time * 20.0f));
             for (int k = 0; k < n; ++k)
             {

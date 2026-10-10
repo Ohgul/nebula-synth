@@ -8,15 +8,15 @@
 // ===========================================================================
 namespace NebulaColours
 {
-    inline const juce::Colour background { 0xff12141c };
-    inline const juce::Colour panel      { 0xff1b1e2b };
-    inline const juce::Colour panelEdge  { 0xff2a2e40 };
-    inline const juce::Colour track      { 0xff2e3247 };
-    inline const juce::Colour accent     { 0xff8b7cf6 }; // violeta
-    inline const juce::Colour accent2    { 0xff4fd1c5 }; // turquesa
-    inline const juce::Colour warm       { 0xffff9f6b }; // naranja (filtro 2, avisos)
-    inline const juce::Colour text       { 0xffe6e8f2 };
-    inline const juce::Colour textDim    { 0xff8d92ab };
+    inline const juce::Colour background { 0xff101218 };
+    inline const juce::Colour panel      { 0xff1a1d25 };
+    inline const juce::Colour panelEdge  { 0xff303541 };
+    inline const juce::Colour track      { 0xff272c36 };
+    inline const juce::Colour accent     { 0xff8d9fe8 }; // violeta
+    inline const juce::Colour accent2    { 0xff79b8b0 }; // turquesa
+    inline const juce::Colour warm       { 0xffd69c7b }; // naranja (filtro 2, avisos)
+    inline const juce::Colour text       { 0xffe8eaf0 };
+    inline const juce::Colour textDim    { 0xff9299a8 };
 }
 
 // Estado "neuronal" de la interfaz: qué tan loco está el sonido (0..1) y el reloj de animación
@@ -66,62 +66,46 @@ public:
         setColour (juce::AlertWindow::outlineColourId, accent);
     }
 
-    // Perilla estilo Moog: tapa negra estriada, falda metálica y anillo de LEDs
+    // Minimal rotary control: quiet track, single accent arc and precise indicator.
+    // Functional slider mapping remains unchanged.
     void drawRotarySlider (juce::Graphics& g, int x, int y, int w, int h, float pos,
                            float startAngle, float endAngle, juce::Slider& slider) override
     {
         using namespace NebulaColours;
-        const auto bounds = juce::Rectangle<int> (x, y, w, h).toFloat().reduced (2.0f);
-        const float R = juce::jmin (bounds.getWidth(), bounds.getHeight()) * 0.5f;
-        const auto c = bounds.getCentre();
+        const auto bounds = juce::Rectangle<int> (x, y, w, h).toFloat().reduced (4.0f);
+        const auto centre = bounds.getCentre();
+        const float radius = juce::jmin (bounds.getWidth(), bounds.getHeight()) * 0.42f;
         const float angle = startAngle + pos * (endAngle - startAngle);
-        const bool custom = slider.isColourSpecified (juce::Slider::rotarySliderFillColourId);
-        const auto led = custom ? slider.findColour (juce::Slider::rotarySliderFillColourId) : Neural::hot (accent2);
+        const auto active = slider.isColourSpecified (juce::Slider::rotarySliderFillColourId)
+                            ? slider.findColour (juce::Slider::rotarySliderFillColourId)
+                            : Neural::hot (accent);
         const bool bipolar = slider.getMinimum() < 0.0 && slider.getMaximum() > 0.0;
         const float zero = bipolar ? (float) slider.valueToProportionOfLength (0.0) : 0.0f;
-
-        // Anillo de LEDs
-        constexpr int numLeds = 15;
-        const float ledR = R - 2.2f, dot = juce::jmax (1.5f, R * 0.075f);
-        for (int i = 0; i < numLeds; ++i)
+        auto arc = [&] (float from, float to)
         {
-            const float t = (float) i / (numLeds - 1);
-            const float a = startAngle + t * (endAngle - startAngle);
-            const juce::Point<float> p (c.x + ledR * std::sin (a), c.y - ledR * std::cos (a));
-            const bool lit = bipolar ? ((t >= juce::jmin (zero, pos) - 0.01f) && (t <= juce::jmax (zero, pos) + 0.01f) && std::abs (pos - zero) > 0.02f)
-                                     : (t <= pos + 0.01f && pos > 0.005f);
-            if (lit)
-            {
-                g.setColour (led.withAlpha (0.25f));
-                g.fillEllipse (p.x - dot * 2.0f, p.y - dot * 2.0f, dot * 4.0f, dot * 4.0f);
-                g.setColour (led.brighter (0.3f));
-            }
-            else g.setColour (juce::Colour (0xff2a2c36));
-            g.fillEllipse (p.x - dot, p.y - dot, dot * 2.0f, dot * 2.0f);
-        }
-
-        // Falda metálica
-        const float skirt = R * 0.74f;
-        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff4a4d58), c.x, c.y - skirt, juce::Colour (0xff15161b), c.x, c.y + skirt, false));
-        g.fillEllipse (c.x - skirt, c.y - skirt, skirt * 2.0f, skirt * 2.0f);
-        g.setColour (juce::Colours::black.withAlpha (0.6f));
-        g.drawEllipse (c.x - skirt, c.y - skirt, skirt * 2.0f, skirt * 2.0f, 1.0f);
-
-        // Tapa negra con estrías
-        const float cap = R * 0.58f;
-        g.setGradientFill (juce::ColourGradient (juce::Colour (slider.isMouseOverOrDragging() ? 0xff34363f : 0xff2a2b31), c.x, c.y - cap,
-                                                 juce::Colour (0xff0b0b0e), c.x, c.y + cap, false));
-        g.fillEllipse (c.x - cap, c.y - cap, cap * 2.0f, cap * 2.0f);
-        g.setColour (juce::Colours::white.withAlpha (0.06f));
-        for (int i = 0; i < 24; ++i)
+            juce::Path path;
+            path.addCentredArc (centre.x, centre.y, radius, radius, 0.0f,
+                                startAngle + from * (endAngle - startAngle),
+                                startAngle + to * (endAngle - startAngle), true);
+            return path;
+        };
+        g.setColour (panelEdge);
+        g.strokePath (arc (0.0f, 1.0f), juce::PathStrokeType (2.4f));
+        const float from = bipolar ? juce::jmin (zero, pos) : 0.0f;
+        const float to = bipolar ? juce::jmax (zero, pos) : pos;
+        if (to - from > 0.001f)
         {
-            const float a = angle + juce::MathConstants<float>::twoPi * (float) i / 24.0f;
-            g.drawLine (c.x + cap * 0.86f * std::sin (a), c.y - cap * 0.86f * std::cos (a), c.x + cap * std::sin (a), c.y - cap * std::cos (a), 1.0f);
+            g.setColour (active);
+            g.strokePath (arc (from, to), juce::PathStrokeType (2.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
         }
-        // Línea indicadora blanca
-        g.setColour (juce::Colour (0xfff2f2f4));
-        g.drawLine (c.x + cap * 0.2f * std::sin (angle), c.y - cap * 0.2f * std::cos (angle),
-                    c.x + cap * 0.95f * std::sin (angle), c.y - cap * 0.95f * std::cos (angle), juce::jmax (1.6f, R * 0.07f));
+        g.setColour (panel);
+        g.fillEllipse (centre.x - radius * 0.74f, centre.y - radius * 0.74f,
+                       radius * 1.48f, radius * 1.48f);
+        g.setColour (text.withAlpha (slider.isEnabled() ? 0.95f : 0.35f));
+        g.drawLine (centre.x + radius * 0.16f * std::sin (angle),
+                    centre.y - radius * 0.16f * std::cos (angle),
+                    centre.x + radius * 0.64f * std::sin (angle),
+                    centre.y - radius * 0.64f * std::cos (angle), 2.0f);
     }
 
     void drawComboBox (juce::Graphics& g, int w, int h, bool, int, int, int, int, juce::ComboBox& box) override
