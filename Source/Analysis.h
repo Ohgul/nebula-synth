@@ -100,12 +100,13 @@ public:
                 for (int b = 0; b < SoundFeatures::numBands; ++b)
                 {
                     const size_t i = (size_t) (f * SoundFeatures::numBands + b);
-                    d += std::abs (target.shape[i] - cand.shape[i]);
+                    // Por debajo de -40 dB una banda casi no se oye (queda tapada): no cuenta la diferencia
+                    d += std::abs (juce::jmax (-40.0f, target.shape[i]) - juce::jmax (-40.0f, cand.shape[i]));
                 }
                 shapeSum += w * d / SoundFeatures::numBands;
                 weightSum += w;
             }
-            envSum += std::abs (target.env[(size_t) f] - cand.env[(size_t) f]);
+            envSum += std::abs (juce::jmax (-45.0f, target.env[(size_t) f]) - juce::jmax (-45.0f, cand.env[(size_t) f]));
         }
 
         const double shapeD = weightSum > 0.0 ? shapeSum / weightSum : 60.0;

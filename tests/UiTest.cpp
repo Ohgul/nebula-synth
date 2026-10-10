@@ -118,13 +118,37 @@ int main (int argc, char** argv)
         save (shot (1.0f), "ui_jardin_sample.png");
 
         // Ventana para elegir la sección
-        click ("Elegir seccion");
+        click ("Seccion");
         pump (300);
         save (shot (1.0f), "ui_elegir_seccion.png");
         click ("Listo");
         pump (100);
 
+        // Recrear (resíntesis) y la receta
+        click ("Recrear sonido");
+        pump (1300);
+        save (shot (1.0f), "ui_recreado.png");
+        click ("Ver la receta");
+        pump (300);
+        save (shot (1.0f), "ui_receta.png");
+        click ("Cerrar");
+        pump (100);
+
+        // Limpiar: opciones + historial
+        click ("Limpiar");
+        for (int k = 0; k < 300 && proc->cleaner.isRunning(); ++k) pump (100);
+        pump (300);
+        save (shot (1.0f), "ui_limpiar.png");
+        if (auto* card = first ((CleanCard*) nullptr)) juce::ignoreUnused (card);
+        proc->rescueCleaned (Cleaner::Tonal);
+        for (int k = 0; k < 300 && proc->cleaner.isRunning(); ++k) pump (100);
+        pump (300);
+        save (shot (1.0f), "ui_limpiar_historial.png");
+        if (auto* cp = first ((CleanerPanel*) nullptr)) cp->setVisible (false);
+        pump (100);
+
         click ("Usar el sample");
+        { auto* p = proc->state.getParameter (ParamID::smpGrainAmt); p->setValueNotifyingHost (0.4f); }
         pump (200);
     }
 
@@ -139,6 +163,16 @@ int main (int argc, char** argv)
     pump (300);
     save (shot (1.0f), "ui_editar.png");
 
+    // Arrastrando un audio sobre el oscilador 1
+    if (auto* ev = first ((EditView*) nullptr))
+    {
+        const auto c = ev->getLocalBounds().getTopLeft() + juce::Point<int> (150, 150);
+        ev->fileDragMove ({ "x.wav" }, c.x, c.y);
+        pump (100);
+        save (shot (1.0f), "ui_arrastrar_onda.png");
+        ev->fileDragExit ({});
+    }
+
     // Dibujar onda
     if (auto* d = first ((DrawPanel*) nullptr)) { d->setVisible (true); d->toFront (false); }
     pump (200);
@@ -147,6 +181,7 @@ int main (int argc, char** argv)
 
     // --- Modulación ---
     click ("Modulacion");
+    { auto* p = proc->state.getParameter (ParamID::lfo2On); p->setValueNotifyingHost (0.0f); }
     noteOn (60);
     pump (500);
     save (shot (1.0f), "ui_modulacion.png");

@@ -8,7 +8,11 @@ namespace
     {
         return Icons::fromFunction ([] (float x) { return std::tanh (2.5f * std::sin (x * juce::MathConstants<float>::twoPi)) / std::tanh (2.5f); });
     }
-    juce::Path charIcon (int i) { return i == 0 ? Icons::sine() : i == 1 ? softClipIcon() : Icons::pulse(); }
+    juce::Path hardClipIcon()
+    {
+        return Icons::fromFunction ([] (float x) { return std::tanh (7.0f * std::sin (x * juce::MathConstants<float>::twoPi)) / std::tanh (7.0f); });
+    }
+    juce::Path charIcon (int i) { return i == 0 ? Icons::sine() : i == 1 ? softClipIcon() : hardClipIcon(); }
     juce::Path slopeIcon (int i)
     {
         juce::Path p; p.startNewSubPath (0.08f, 0.35f); p.lineTo (0.5f, 0.35f);
@@ -18,8 +22,24 @@ namespace
     const juce::StringArray waveTips { "Seno: suave y puro", "Triangulo: suave con un poco de brillo", "Sierra: brillante, clasica de sintes",
                                        "Pulso: cuadrada; Forma cambia el ancho (PWM)", "Super Saw: 7 sierras desafinadas; Forma = desafinacion",
                                        "Sync: lead agresivo; Forma = cuanto \"chilla\"", "Wavetable: recorre una tabla de ondas; Forma = posicion" };
+    juce::Path grainIcon (int i)
+    {
+        switch (i)
+        {
+            case GrainType::Sharp:   return Icons::fromFunction ([] (float x) { return x < 0.08f ? -0.9f + 22.0f * x : 0.9f - 1.8f * std::exp (-4.0f * (x - 0.08f)); });
+            case GrainType::Scatter: return Icons::grains();
+            case GrainType::Reverse: return Icons::reverseArrow();
+            case GrainType::Octave:  return Icons::note();
+            default:                 return Icons::fromFunction ([] (float x) { return 0.9f - 1.8f * (0.5f - 0.5f * std::cos (x * juce::MathConstants<float>::twoPi)); });
+        }
+    }
+    const juce::StringArray grainTips { "Suave: granos redondos, nube lisa", "Nitido: granos con golpe, textura ritmica",
+                                        "Disperso: granos de todo el sonido, abiertos en estereo", "Reversa: cada grano suena al reves",
+                                        "Octava: granos una octava (y una quinta) arriba, brillo tipo shimmer" };
     const juce::StringArray filterTips { "Pasa bajos: quita agudos", "Pasa banda: deja solo una zona", "Pasa altos: quita graves", "Notch: quita una zona" };
-    const juce::StringArray charTips { "Limpio", "Calido: satura suave", "Saturado: sucio y agresivo" };
+    const juce::StringArray charTips { "Limpio: transparente, no cambia el caracter del sonido",
+                                     "Moog: filtro de escalera de 4 polos, colorea suave y redondo",
+                                     "Moog +: la escalera empujada; mas color, grasa y saturacion" };
 }
 
 //==============================================================================
@@ -48,13 +68,14 @@ EditView::EditView (NebulaAudioProcessor& p)
                   "Tempo: el sample dura los tiempos elegidos al BPM de tu proyecto; el tono no cambia la velocidad" },
                 { "Clasico", "Tempo" }),
       beats (p.state, ParamID::smpBeats, "Duracion", "Cuanto dura la seccion en modo Tempo (Auto = la mas cercana)"),
+      grainType (p.state, ParamID::smpGrainType, grainIcon, grainTips),
       filterGraph (p),
       f1Type (p.state, ParamID::filterType, [] (int i) { return Icons::filterShape (i); }, filterTips),
       f1Slope (p.state, ParamID::filterSlope, slopeIcon, { "12 dB: suave", "24 dB: mas fuerte" }),
-      f1Char (p.state, ParamID::filterChar, charIcon, charTips),
+      f1Char (p.state, ParamID::filterChar, charIcon, charTips, { "Limpio", "Moog", "Moog+" }),
       f2Type (p.state, ParamID::f2Type, [] (int i) { return Icons::filterShape (i); }, filterTips),
       f2Slope (p.state, ParamID::f2Slope, slopeIcon, { "12 dB: suave", "24 dB: mas fuerte" }),
-      f2Char (p.state, ParamID::f2Char, charIcon, charTips),
+      f2Char (p.state, ParamID::f2Char, charIcon, charTips, { "Limpio", "Moog", "Moog+" }),
       routing (p.state, ParamID::filterRouting, [] (int i) { return i == 0 ? Icons::serial() : Icons::parallel(); },
                { "Serie: el sonido pasa por el filtro 1 y luego por el 2", "Paralelo: los dos filtros a la vez, mezclados" }),
       f2On (p.state, ParamID::f2On, "", Icons::filterShape (2), "Encender el filtro 2"),
@@ -63,9 +84,9 @@ EditView::EditView (NebulaAudioProcessor& p)
                 { "Poli: acordes", "Mono: una nota a la vez", "Legato: una nota, sin reiniciar al encadenar (ideal para glide)" },
                 { "Poli", "Mono", "Legato" })
 {
-    for (auto* c : std::initializer_list<juce::Component*> { &engine, &wave1, &wave2, &preview1, &preview2, &table1, &table2, &draw1,
+    for (auto* c : std::initializer_list<juce::Component*> { &engine, &wave1, &wave2, &preview1, &preview2, &table1, &table2, &draw1, &audio1, &audio2,
                                                              &regionMini, &editRegion, &reverse, &loop, &playMode, &beats,
-                                                             &filterGraph, &f1Type, &f1Slope, &f1Char, &f2Type, &f2Slope, &f2Char, &routing, &f2On,
+                                                             &grainType, &cleanButton, &filterGraph, &f1Type, &f1Slope, &f1Char, &f2Type, &f2Slope, &f2Char, &routing, &f2On,
                                                              &ampGraph, &polyMode })
         addAndMakeVisible (c);
 
@@ -73,9 +94,19 @@ EditView::EditView (NebulaAudioProcessor& p)
     f2On.colour = warm;
     engine.colour = accent2;
     editRegion.horizontal = true;
+    cleanButton.horizontal = true;
+    cleanButton.colour = accent2;
+    cleanButton.onClick = [this] { if (onOpenCleaner) onOpenCleaner(); };
     editRegion.onClick = [this] { if (onOpenSampleEditor) onOpenSampleEditor(); };
     regionMini.onClick = [this] { if (onOpenSampleEditor) onOpenSampleEditor(); };
     draw1.onClick = [this] { if (onOpenDraw) onOpenDraw(); };
+    for (int o = 1; o <= 2; ++o)
+        (o == 1 ? audio1 : audio2).onClick = [this, o]
+        {
+            chooser = std::make_unique<juce::FileChooser> ("Elige un audio para hacer la onda", juce::File(), "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg");
+            chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                                  [this, o] (const juce::FileChooser& fc) { if (fc.getResult().existsAsFile()) loadAudioAsWave (fc.getResult(), o); });
+        };
 
     shape1 = &knob (ParamID::osc1Shape, "Forma", "Cambia segun la onda: ancho, desafinacion, sync o posicion");
     oct1   = &knob (ParamID::osc1Octave, "Octava", "Octava del oscilador 1");
@@ -86,12 +117,15 @@ EditView::EditView (NebulaAudioProcessor& p)
     smpStart   = &knob (ParamID::smpStart, "Inicio", "Desde donde empieza dentro de la seccion");
     smpTune    = &knob (ParamID::smpTune, "Afinacion", "Transporta el sample en semitonos");
     smpTexture = &knob (ParamID::smpTexture, "Textura", "Granular: estira y difumina el sonido");
-    smpGrain   = &knob (ParamID::smpGrain, "Grano", "Tamano de los granos");
+    smpGrain   = &knob (ParamID::smpGrain, "Tam. grano", "Tamano de los granos");
+    smpGrainAmt = &knob (ParamID::smpGrainAmt, "Granos", "Cantidad de granos que se agregan encima del sonido (0 = sin granos)");
+    smpGrainAmt->setColour (accent2);
 
     mix   = &knob (ParamID::oscMix, "Mezcla", "Balance entre oscilador 1 y 2");
     sub   = &knob (ParamID::subLevel, "Sub", "Una octava abajo: cuerpo y graves");
     fm    = &knob (ParamID::fmAmount, "FM", "El oscilador 2 modula al 1: sonidos metalicos");
     noise = &knob (ParamID::noise, "Ruido", "Mezcla ruido (aire, golpe)");
+    noiseCol = &knob (ParamID::noiseColor, "Color", "Color del ruido: oscuro (grave) a blanco (brillante)");
     uniV  = &knob (ParamID::uniVoices, "Voces", "Copias de cada nota (unisono): mas grueso");
     uniD  = &knob (ParamID::uniDetune, "Desafinar", "Cuanto se separan las copias");
     uniW  = &knob (ParamID::uniWidth, "Ancho", "Apertura estereo de las copias");
@@ -122,12 +156,85 @@ EditView::EditView (NebulaAudioProcessor& p)
     startTimerHz (10);
 }
 
+// ---- Arrastrar un audio a un oscilador ----
+int EditView::oscAt (int x, int y) const
+{
+    if (samplerEngine()) return 0;
+    if (rOsc1.contains (x, y)) return 1;
+    if (rOsc2.contains (x, y)) return 2;
+    return 0;
+}
+
+bool EditView::isInterestedInFileDrag (const juce::StringArray& files)
+{
+    for (auto& f : files)
+        if (juce::File (f).hasFileExtension ("wav;aif;aiff;flac;mp3;ogg")) return true;
+    return false;
+}
+
+void EditView::fileDragMove (const juce::StringArray&, int x, int y)
+{
+    const int o = oscAt (x, y);
+    if (o != dropOsc) { dropOsc = o; repaint(); }
+}
+
+void EditView::filesDropped (const juce::StringArray& files, int x, int y)
+{
+    const int o = oscAt (x, y);
+    dropOsc = 0;
+    if (o > 0 && ! files.isEmpty()) loadAudioAsWave (juce::File (files[0]), o);
+    repaint();
+}
+
+void EditView::loadAudioAsWave (const juce::File& f, int osc)
+{
+    juce::String error;
+    if (proc.makeWavetableFromFile (f, error))
+    {
+        if (osc == 2)
+        {
+            // makeWavetableFromFile pone la onda en el osc 1; aquí la pasamos al 2
+            setParamValue (proc.state, ParamID::osc2Wave, (float) Wave::Table);
+            setParamValue (proc.state, ParamID::osc2Table, (float) WavetableBank::userIndex);
+        }
+        dropMessage = "Onda creada de \"" + f.getFileNameWithoutExtension() + "\" (tabla Usuario). Mueve Forma para recorrerla.";
+    }
+    else dropMessage = error;
+    dropMessageTime = juce::Time::getMillisecondCounterHiRes();
+    updateVisibility();
+    repaint();
+}
+
+void EditView::paintOverChildren (juce::Graphics& g)
+{
+    if (dropOsc > 0)
+    {
+        const auto r = (dropOsc == 1 ? rOsc1 : rOsc2).toFloat().reduced (2.0f);
+        g.setColour (accent.withAlpha (0.22f));
+        g.fillRoundedRectangle (r, 8.0f);
+        g.setColour (accent2);
+        g.drawRoundedRectangle (r, 8.0f, 2.0f);
+        g.setFont (juce::FontOptions (14.0f, juce::Font::bold));
+        g.drawText ("Suelta: este audio se vuelve la onda", r.toNearestInt(), juce::Justification::centred);
+    }
+    if (dropMessage.isNotEmpty() && juce::Time::getMillisecondCounterHiRes() - dropMessageTime < 5000.0)
+    {
+        auto r = rOsc1.getUnion (rOsc2).removeFromBottom (24).reduced (12, 2).toFloat();
+        g.setColour (juce::Colour (0xe0151824));
+        g.fillRoundedRectangle (r, 5.0f);
+        g.setColour (text);
+        g.setFont (juce::FontOptions (11.5f));
+        g.drawFittedText (dropMessage, r.toNearestInt().reduced (8, 0), juce::Justification::centredLeft, 1);
+    }
+}
+
 void EditView::updateVisibility()
 {
     const bool s = samplerEngine();
     for (auto* c : std::initializer_list<juce::Component*> { &wave1, &wave2, &preview1, &preview2, shape1, oct1, shape2, semi2, fine2 })
         c->setVisible (! s);
-    for (auto* c : std::initializer_list<juce::Component*> { &regionMini, &editRegion, &reverse, &loop, &playMode, smpStart, smpTune, smpTexture, smpGrain })
+    for (auto* c : std::initializer_list<juce::Component*> { &regionMini, &editRegion, &reverse, &loop, &playMode, smpStart, smpTune, smpTexture, smpGrain,
+                                                             smpGrainAmt, &grainType, &cleanButton })
         c->setVisible (s);
     beats.setVisible (s && getParamValue (proc.state, ParamID::smpPlayMode) > 0.5f);
 
@@ -136,6 +243,8 @@ void EditView::updateVisibility()
     table1.setVisible (wt1);
     table2.setVisible (wt2);
     draw1.setVisible (wt1);
+    audio1.setVisible (wt1);
+    audio2.setVisible (wt2);
 
     const bool f2 = getParamValue (proc.state, ParamID::f2On) > 0.5f;
     for (auto* c : std::initializer_list<juce::Component*> { &f2Type, &f2Slope, &f2Char, &routing, cut2, res2, env2 })
@@ -149,6 +258,7 @@ void EditView::timerCallback()
 {
     updateVisibility();
     if (samplerEngine() != lastSampler) { lastSampler = samplerEngine(); repaint(); }
+    if (dropMessage.isNotEmpty() && juce::Time::getMillisecondCounterHiRes() - dropMessageTime > 5000.0) { dropMessage.clear(); repaint(); }
 }
 
 void EditView::paint (juce::Graphics& g)
@@ -178,6 +288,18 @@ void EditView::paint (juce::Graphics& g)
         g.drawText (t, r, juce::Justification::centred);
     };
     badge (f1Type.getBounds().withWidth (18).withHeight (18).translated (-24, 6), "1", accent2);
+    if (samplerEngine())
+    {
+        g.setColour (textDim);
+        g.setFont (juce::FontOptions (9.5f, juce::Font::bold));
+        g.drawText ("TIPO DE GRANO", grainType.getBounds().translated (0, -14).withHeight (12), juce::Justification::centredLeft);
+    }
+
+    // Nombre de cada grupo sobre la primera fila de filtros
+    g.setColour (textDim);
+    g.setFont (juce::FontOptions (9.5f, juce::Font::bold));
+    for (auto [c, t] : { std::pair<juce::Component*, const char*> { &f1Type, "TIPO" }, { &f1Slope, "PENDIENTE" }, { &f1Char, "COLOR" } })
+        g.drawText (t, c->getBounds().translated (0, -13).withHeight (12), juce::Justification::centred);
 
     g.setColour (textDim);
     g.setFont (juce::FontOptions (11.0f));
@@ -201,7 +323,7 @@ void EditView::resized()
     rOsc2 = left;
     rSample = rOsc1.getUnion (rOsc2);
 
-    auto layoutOsc = [] (juce::Rectangle<int> area, IconChoice& wave, WavePreview& prev, ParamCombo& table, std::vector<NebKnob*> ks, IconButton* draw)
+    auto layoutOsc = [] (juce::Rectangle<int> area, IconChoice& wave, WavePreview& prev, ParamCombo& table, std::vector<NebKnob*> ks, IconButton* draw, IconButton* audio)
     {
         auto a = area.reduced (10).withTrimmedTop (22);
         wave.setBounds (a.removeFromTop (30));
@@ -211,22 +333,28 @@ void EditView::resized()
         {
             auto side = pr.removeFromRight (104);
             table.setBounds (side.removeFromTop (28).reduced (4, 0));
-            if (draw != nullptr) draw->setBounds (side.removeFromTop (26).withSizeKeepingCentre (26, 24));
+            auto btns = side.removeFromTop (26);
+            if (audio != nullptr) audio->setBounds (btns.removeFromRight (btns.getWidth() / 2).withSizeKeepingCentre (26, 24));
+            if (draw != nullptr) draw->setBounds (btns.withSizeKeepingCentre (26, 24));
         }
         prev.setBounds (pr);
         a.removeFromTop (4);
         const int w = a.getWidth() / (int) ks.size();
         for (auto* k : ks) k->setBounds (a.removeFromLeft (w));
     };
-    layoutOsc (rOsc1, wave1, preview1, table1, { shape1, oct1 }, &draw1);
-    layoutOsc (rOsc2, wave2, preview2, table2, { shape2, semi2, fine2 }, nullptr);
+    layoutOsc (rOsc1, wave1, preview1, table1, { shape1, oct1 }, &draw1, &audio1);
+    layoutOsc (rOsc2, wave2, preview2, table2, { shape2, semi2, fine2 }, nullptr, &audio2);
 
     {
         auto a = rSample.reduced (10).withTrimmedTop (22);
         auto leftCol = a.removeFromLeft (270);
-        regionMini.setBounds (leftCol.removeFromTop (118));
+        regionMini.setBounds (leftCol.removeFromTop (88));
         leftCol.removeFromTop (6);
-        editRegion.setBounds (leftCol.removeFromTop (30).withWidth (160));
+        auto btns = leftCol.removeFromTop (30);
+        editRegion.setBounds (btns.removeFromLeft (btns.getWidth() / 2 + 6).reduced (0, 0).withTrimmedRight (4));
+        cleanButton.setBounds (btns);
+        leftCol.removeFromTop (20);
+        grainType.setBounds (leftCol.removeFromTop (30));
         a.removeFromLeft (12);
         auto top = a.removeFromTop (48);
         playMode.setBounds (top.removeFromLeft (140));
@@ -235,8 +363,8 @@ void EditView::resized()
         loop.setBounds (top.removeFromLeft (70).reduced (2));
         a.removeFromTop (4);
         beats.setBounds (a.removeFromTop (40).withWidth (140));
-        const int w = a.getWidth() / 4;
-        for (auto* k : { smpStart, smpTune, smpTexture, smpGrain }) k->setBounds (a.removeFromLeft (w));
+        const int w = a.getWidth() / 5;
+        for (auto* k : { smpStart, smpTune, smpTexture, smpGrain, smpGrainAmt }) k->setBounds (a.removeFromLeft (w));
     }
 
     row1.removeFromLeft (gap);
@@ -247,7 +375,8 @@ void EditView::resized()
         auto a = rMix.reduced (8).withTrimmedTop (24);
         auto top = a.removeFromTop (a.getHeight() / 2), bottom = a;
         mix->setBounds (top.removeFromLeft (top.getWidth() / 2)); sub->setBounds (top);
-        fm->setBounds (bottom.removeFromLeft (bottom.getWidth() / 2)); noise->setBounds (bottom);
+        const int w3 = bottom.getWidth() / 3;
+        fm->setBounds (bottom.removeFromLeft (w3)); noise->setBounds (bottom.removeFromLeft (w3)); noiseCol->setBounds (bottom);
     }
     {
         auto a = rUni.reduced (8).withTrimmedTop (24);
@@ -273,11 +402,11 @@ void EditView::resized()
             if (lead != nullptr) lead->setBounds (icons.removeFromLeft (30).withSizeKeepingCentre (28, 28));
             else icons.removeFromLeft (30);
             icons = icons.withSizeKeepingCentre (icons.getWidth(), 30);
-            type.setBounds (icons.removeFromLeft (140));
+            type.setBounds (icons.removeFromLeft (124));
             icons.removeFromLeft (6);
-            slope.setBounds (icons.removeFromLeft (64));
+            slope.setBounds (icons.removeFromLeft (56));
             icons.removeFromLeft (6);
-            ch.setBounds (icons.removeFromLeft (90));
+            ch.setBounds (icons.removeFromLeft (108).expanded (0, 4));
             const int w = rowArea.getWidth() / 4;
             for (auto* k : ks) k->setBounds (rowArea.removeFromLeft (w));
             return rowArea;
@@ -329,6 +458,8 @@ ModView::ModView (NebulaAudioProcessor& p)
       lfo2Sync (p.state, ParamID::lfo2Sync, "Sync", "Libre (Hz) o sincronizado al tempo del proyecto"),
       lfo1Retrig (p.state, ParamID::lfoRetrig, "Reinicio", Icons::back(), "Reiniciar el LFO con cada nota"),
       lfo2Retrig (p.state, ParamID::lfo2Retrig, "Reinicio", Icons::back(), "Reiniciar el LFO con cada nota"),
+      lfo1Power (p.state, ParamID::lfoOn, "", Icons::power(), "Encender / apagar el LFO 1 (apagado no mueve nada)"),
+      lfo2Power (p.state, ParamID::lfo2On, "", Icons::power(), "Encender / apagar el LFO 2 (apagado no mueve nada)"),
       matrix (p)
 {
     const char* names[] { "Env 1 (volumen)", "Env 2", "Env 3" };
@@ -356,8 +487,10 @@ ModView::ModView (NebulaAudioProcessor& p)
         }
 
     for (auto* c : std::initializer_list<juce::Component*> { &envGraph, &env2Loop, &env3Loop, &lfo1Shape, &lfo2Shape, &lfo1Graph, &lfo2Graph,
-                                                             &lfo1Sync, &lfo2Sync, &lfo1Retrig, &lfo2Retrig, &matrix })
+                                                             &lfo1Sync, &lfo2Sync, &lfo1Retrig, &lfo2Retrig, &matrix, &lfo1Power, &lfo2Power })
         addAndMakeVisible (c);
+    lfo1Power.colour = MatrixGrid::sourceColour (2);
+    lfo2Power.colour = MatrixGrid::sourceColour (3);
     lfo1Shape.colour = MatrixGrid::sourceColour (2);
     lfo2Shape.colour = MatrixGrid::sourceColour (3);
     env2Loop.colour = MatrixGrid::sourceColour (0);
@@ -376,6 +509,17 @@ ModView::ModView (NebulaAudioProcessor& p)
     modAmount = &knob (ParamID::modAmount, "Cantidad", "Escala toda la modulacion de la matriz");
 
     showEnv (1);
+    startTimerHz (10);
+}
+
+// Un LFO apagado se ve atenuado (y no mueve nada)
+void ModView::timerCallback()
+{
+    const bool on1 = lfo1Power.getToggleState(), on2 = lfo2Power.getToggleState();
+    for (auto* c : std::initializer_list<juce::Component*> { &lfo1Shape, &lfo1Graph, &lfo1Sync, &lfo1Retrig, l1Rate, l1Fade, l1Pitch, l1Filter })
+        c->setAlpha (on1 ? 1.0f : 0.35f);
+    for (auto* c : std::initializer_list<juce::Component*> { &lfo2Shape, &lfo2Graph, &lfo2Sync, &lfo2Retrig, l2Rate, l2Fade })
+        c->setAlpha (on2 ? 1.0f : 0.35f);
 }
 
 void ModView::showEnv (int index)
@@ -461,6 +605,8 @@ void ModView::resized()
         const int w = a.getWidth() / (int) ks.size();
         for (auto* k : ks) k->setBounds (a.removeFromLeft (w));
     };
+    lfo1Power.setBounds (rLfo1.getRight() - 40, rLfo1.getY() + 5, 30, 24);
+    lfo2Power.setBounds (rLfo2.getRight() - 40, rLfo2.getY() + 5, 30, 24);
     layoutLfo (rLfo1, lfo1Shape, lfo1Graph, lfo1Sync, lfo1Retrig, { l1Rate, l1Fade, l1Pitch, l1Filter });
     layoutLfo (rLfo2, lfo2Shape, lfo2Graph, lfo2Sync, lfo2Retrig, { l2Rate, l2Fade });
 

@@ -6,13 +6,16 @@
 #include "SynthVoice.h"
 #include "Garden.h"
 #include "Imitator.h"
+#include "SoundProfile.h"
+#include "Recipe.h"
+#include "Cleaner.h"
 
 class NebulaAudioProcessor : public juce::AudioProcessor,
                              private juce::AsyncUpdater
 {
 public:
     NebulaAudioProcessor();
-    ~NebulaAudioProcessor() override { imitator.stop(); cancelPendingUpdate(); }
+    ~NebulaAudioProcessor() override { imitator.stop(); cleaner.cancel(); cancelPendingUpdate(); }
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
@@ -56,7 +59,7 @@ public:
     // ---- Sample ----
     SampleSource sampleSource;
     juce::String loadSample (const juce::File& file);          // devuelve "" o un mensaje de error
-    void setSample (std::shared_ptr<const SampleData> s);
+    void setSample (std::shared_ptr<const SampleData> s, bool keepHistory = false);
     void useSampleAsInstrument();                                // "Usar el sample"
     void startImitation();                                       // "Imitar con el sinte"
     bool makeWavetableFromSample (int frames, float smoothing);  // "Hacer onda"
@@ -74,8 +77,34 @@ public:
     float rootOffset() const  { return voiceCtx.rootOffset.load(); }
     void autoRegion();        // sugiere una sección (salta silencios)
 
-    // Escuchar la selección
-    void startPreview()  { previewPos = 0.0; previewing = true; }
+    // ---- Recrear (resíntesis): el sinte reconstruye el sonido del sample ----
+    enum class RecreateResult { Failed, Resynthesized, Imitating };
+    RecreateResult recreateFromSample();
+    SoundProfile lastProfile;                 // último análisis del sample (para la receta)
+    juce::String lastProfileSample;           // nombre del audio analizado
+    enum class RecipeOrigin { None, Recreated, Imitated, WaveOnly };
+    RecipeOrigin recipeOrigin = RecipeOrigin::None;
+    juce::String recipeText();                // receta completa del sonido actual
+    float similarityOfCurrentPatch();         // parecido del patch actual con la sección del sample
+
+    // Arrastrar un audio al oscilador: se vuelve la tabla "Usuario"
+    bool makeWavetableFromFile (const juce::File& file, juce::String& error);
+
+    // ---- Limpiar: versiones separadas del audio + historial ----
+    Cleaner::Job cleaner;
+    struct Version { juce::String label; std::shared_ptr<const SampleData> sample; };
+    std::vector<Version> history;            // Original -> lo que vas rescatando
+    int historyIndex = -1;
+    void startCleaning();
+    bool rescueCleaned (int kind);           // "Rescatar este"
+    void restoreVersion (int index);         // volver a una versión del historial
+
+    // Escuchar la selección (o, si se pasa, otro audio completo)
+    void startPreview (std::shared_ptr<const SampleData> other = nullptr)
+    {
+        previewOther.set (std::move (other));
+        previewPos = 0.0; previewing = true;
+    }
     void stopPreview()   { previewing = false; }
     bool isPreviewing() const { return previewing.load(); }
     float previewProgress() const { return previewProgressValue.load(); }
@@ -105,6 +134,9 @@ private:
     juce::String sampleEmbedded64;
 
     std::atomic<bool> previewing { false };
+    SampleSource previewOther;
+    static std::shared_ptr<const SampleData> withDeepAnalysis (std::shared_ptr<const SampleData> s);
+    void applyResynthesis (const SoundProfile&, ResynthData&);
     std::atomic<float> previewProgressValue { 0.0f };
     double previewPos = 0.0;
 

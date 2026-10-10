@@ -66,7 +66,7 @@ public:
     void loadFile (const juce::File&);
     void chooseFile();
     void setDragHover (bool h)          { dragHover = h; repaint(); }
-    std::function<void()> onSoundChanged, onOpenEditor;
+    std::function<void()> onSoundChanged, onOpenEditor, onOpenCleaner, onOpenRecipe;
     std::function<int()> framesForWave;
 
 private:
@@ -75,10 +75,13 @@ private:
     NebulaAudioProcessor& processor;
     RegionView region;
     IconButton loadButton    { "", Icons::folder(), "Cargar otro audio" },
-               imitateButton { "Imitar con el sinte", Icons::wand(), "El sinte busca el sonido que mas se parece a la seccion elegida" },
+               recreateButton { "Recrear sonido", Icons::wand(), "Resintesis: Nebula analiza la seccion y la reconstruye con sus osciladores (nota exacta, timbre, ruido y envolventes)" },
+               imitateButton { "Imitar con osciladores", Icons::sliders(), "Busca el patch de ondas clasicas (sierra, pulso, filtro...) que mas se parece" },
                useButton     { "Usar el sample", Icons::waveform(), "Toca el audio como instrumento; los brotes lo transforman" },
                waveButton    { "Hacer onda", Icons::cycle(), "Convierte la seccion en una tabla de ondas para el oscilador 1" },
-               editButton    { "Elegir seccion", Icons::scissors(), "Elige que parte del audio se usa (zoom, inicio y fin)" },
+               editButton    { "Seccion", Icons::scissors(), "Elige que parte del audio se usa (zoom, inicio y fin)" },
+               cleanButton   { "Limpiar", Icons::broom(), "Separa la parte del audio que quieres rescatar (nota, golpes, sin ruido...)" },
+               recipeButton  { "Ver la receta", Icons::recipe(), "Como es este sonido y como esta hecho, paso a paso" },
                cancelButton  { "Cancelar", Icons::stop(), "Detener la busqueda" };
     std::unique_ptr<juce::FileChooser> chooser;
     std::shared_ptr<const SampleData> shown;
@@ -104,7 +107,7 @@ public:
     void filesDropped (const juce::StringArray& files, int, int) override;
     void paintOverChildren (juce::Graphics&) override;
 
-    std::function<void()> onOpenSampleEditor;
+    std::function<void()> onOpenSampleEditor, onOpenCleaner, onOpenRecipe;
     std::function<int()> framesForWave;
 
 private:
@@ -125,6 +128,7 @@ private:
                randomButton    { "Al azar", Icons::sparkle(), "Empieza desde un sonido aleatorio" },
                backButton      { "Atras", Icons::back(), "Regresa a la generacion anterior" },
                lockEnvButton   { "Fijar env", Icons::lock(), "Las mutaciones no cambian la envolvente de volumen" },
+               lockFilterButton { "Fijar filtro", Icons::filterShape (0), "Las mutaciones no cambian los filtros (el sonido conserva su caracter)" },
                listenButton    { "Escuchar", Icons::speaker(), "Suena cada vez que eliges un brote" };
 
     int lastVersion = -1;

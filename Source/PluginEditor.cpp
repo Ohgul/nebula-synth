@@ -5,7 +5,7 @@ using namespace NebulaColours;
 
 //==============================================================================
 NebulaContent::NebulaContent (NebulaAudioProcessor& p)
-    : proc (p), garden (p), edit (p), mod (p), sampleEditor (p), drawPanel (p),
+    : proc (p), garden (p), edit (p), mod (p), sampleEditor (p), drawPanel (p), recipePanel (p), cleanerPanel (p),
       keyboard (p.keyboardState, juce::MidiKeyboardComponent::horizontalKeyboard)
 {
     const char* names[] { "Jardin", "Editar", "Modulacion" };
@@ -29,7 +29,10 @@ NebulaContent::NebulaContent (NebulaAudioProcessor& p)
     nextButton.onClick = [this] { const int n = presetBox.getNumItems(); if (n > 0) presetBox.setSelectedItemIndex ((juce::jmax (0, presetBox.getSelectedItemIndex()) + 1) % n); };
     saveButton.onClick = [this] { savePreset(); };
     folderButton.onClick = [] { auto f = NebulaAudioProcessor::userPresetFolder(); f.createDirectory(); f.revealToUser(); };
-    for (auto* b : { &prevButton, &nextButton, &saveButton, &folderButton }) addAndMakeVisible (b);
+    for (auto* b : { &prevButton, &nextButton, &saveButton, &folderButton, &recipeButton }) addAndMakeVisible (b);
+    recipeButton.horizontal = true;
+    recipeButton.colour = accent2;
+    recipeButton.onClick = [this] { recipePanel.open(); };
 
     zoomBox.addItemList ({ "80 %", "90 %", "100 %", "115 %", "130 %" }, 1);
     zoomBox.setSelectedId (3, juce::dontSendNotification);
@@ -42,11 +45,16 @@ NebulaContent::NebulaContent (NebulaAudioProcessor& p)
     addChildComponent (mod);
     addChildComponent (sampleEditor);
     addChildComponent (drawPanel);
+    addChildComponent (recipePanel);
+    addChildComponent (cleanerPanel);
 
     garden.onOpenSampleEditor = [this] { sampleEditor.open(); };
     garden.framesForWave = [this] { return sampleEditor.framesChoice(); };
     edit.onOpenSampleEditor = [this] { sampleEditor.open(); };
     edit.onOpenDraw = [this] { drawPanel.setVisible (true); drawPanel.toFront (true); };
+    garden.onOpenCleaner = [this] { cleanerPanel.open(); };
+    garden.onOpenRecipe  = [this] { recipePanel.open(); };
+    edit.onOpenCleaner   = [this] { cleanerPanel.open(); };
 
     keyboard.setAvailableRange (24, 108);
     keyboard.setColour (juce::MidiKeyboardComponent::keyDownOverlayColourId, accent.withAlpha (0.7f));
@@ -136,8 +144,13 @@ void NebulaContent::timerCallback()
 
     // Si el preset cambió desde fuera (proyecto abierto, otra ventana), mostrarlo
     const int idx = proc.getPresetIndex();
-    if (idx >= 0 && presetBox.getSelectedId() != idx + 1 && ! presetBox.isPopupActive())
-        presetBox.setSelectedId (idx + 1, juce::dontSendNotification);
+    if (! presetBox.isPopupActive())
+    {
+        if (idx >= 0 && presetBox.getSelectedId() != idx + 1)
+            presetBox.setSelectedId (idx + 1, juce::dontSendNotification);
+        else if (idx < 0 && presetBox.getSelectedId() > 0 && presetBox.getSelectedId() < 1000)
+            presetBox.setText ("(sonido propio)", juce::dontSendNotification);
+    }
 }
 
 void NebulaContent::paint (juce::Graphics& g)
@@ -148,7 +161,7 @@ void NebulaContent::paint (juce::Graphics& g)
     g.drawText ("NEBULA", 18, 10, 150, 34, juce::Justification::centredLeft);
     g.setColour (textDim);
     g.setFont (juce::FontOptions (10.0f));
-    g.drawText ("v2", 140, 12, 30, 14, juce::Justification::centredLeft);
+    g.drawText ("v2.1", 140, 12, 40, 14, juce::Justification::centredLeft);
 }
 
 void NebulaContent::resized()
@@ -161,13 +174,15 @@ void NebulaContent::resized()
 
     auto right = header.withSizeKeepingCentre (header.getWidth(), 30);
     zoomBox.setBounds (right.removeFromRight (78));
-    right.removeFromRight (14);
+    right.removeFromRight (10);
+    recipeButton.setBounds (right.removeFromRight (96));
+    right.removeFromRight (10);
     folderButton.setBounds (right.removeFromRight (30));
     right.removeFromRight (4);
     saveButton.setBounds (right.removeFromRight (30));
     right.removeFromRight (8);
     nextButton.setBounds (right.removeFromRight (30));
-    presetBox.setBounds (right.removeFromRight (240).reduced (4, 0));
+    presetBox.setBounds (right.removeFromRight (200).reduced (4, 0));
     prevButton.setBounds (right.removeFromRight (30));
 
     keyboard.setBounds (r.removeFromBottom (74).withTrimmedBottom (12));
@@ -179,6 +194,8 @@ void NebulaContent::resized()
     mod.setBounds (r);
     sampleEditor.setBounds (r.reduced (40, 50));
     drawPanel.setBounds (r.reduced (120, 70));
+    recipePanel.setBounds (r.reduced (150, 16));
+    cleanerPanel.setBounds (r.reduced (24, 16));
 }
 
 //==============================================================================

@@ -2,6 +2,27 @@
 
 Sintetizador polifónico (VST3 / AU) para Ableton en Mac, con un modo para *cultivar* sonidos por mutación.
 
+## Novedades de la versión 2.1
+- **Recrear sonido (resíntesis)**: Nebula analiza tu audio y lo reconstruye con sus propios osciladores.
+  - Saca la nota exacta (con cents), una tabla de ondas que cambia en el tiempo (un cuadro por momento, con todos sus armónicos), el ruido con su envolvente y el vibrato.
+  - Lo puedes tocar en cualquier nota y en acordes, y mutarlo en el Jardín.
+  - Si el sonido no tiene nota clara o es inarmónico (campana, metal), lo arma con osciladores y FM.
+- **Receta**: el botón del libro explica qué es el sonido (nota, tipo, timbre, ruido, envolvente, vibrato), cómo lo reconstruyó Nebula, cómo hacerlo en cualquier sinte y cómo está hecho el patch actual. Se puede copiar.
+- **Tono exacto**: la nota del sample se detecta con cents y se corrige, así que tocar C# suena C#. Si el audio es una frase, se detecta su **tonalidad** (por ejemplo, Re menor) y la tónica queda como raíz.
+- **Limpiar**: para audios que son un conjunto, te da varias versiones para elegir:
+  - Nota principal, Parte tonal, Solo golpes, Sin ruido, Graves, Medios y Agudos.
+  - Las escuchas, rescatas la que quieres y puedes seguir limpiando sobre ella.
+  - El **historial** te deja regresar a cualquier versión. Lo rescatado se guarda dentro del proyecto.
+- **Filtros nuevos**:
+  - **Limpio** es transparente: totalmente abierto no toca la señal, y no pierde graves.
+  - **Moog** es una escalera de 4 polos con compensación de graves.
+  - **Moog+** colorea y satura más.
+  - En el Jardín, **Fijar filtro** evita que las mutaciones cambien los filtros.
+- **LFOs con botón de encendido**: apagado no mueve nada.
+- **Arrastra un audio a un oscilador**, o usa el botón de carpeta junto al lápiz: se vuelve su onda (tabla Usuario).
+- **Granos en el Sample**: **Granos** (cantidad) y **Tipo de grano** (Suave, Nítido, Disperso, Reversa, Octava), encima del sonido.
+- **Color del ruido**: de oscuro a blanco. El ruido también es un destino de la matriz.
+
 ## Novedades de la versión 2
 - Interfaz con **íconos** en lugar de texto; pasa el mouse sobre cualquier cosa para ver qué hace. Tiene un selector de **tamaño de ventana** (80–130 %).
 - **Animaciones** en el Jardín (los brotes crecen y se transforman) y un **osciloscopio circular** alrededor de la semilla.

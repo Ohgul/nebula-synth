@@ -310,16 +310,29 @@ SamplePanel::SamplePanel (NebulaAudioProcessor& p) : processor (p), region (p, f
     region.onClick = [this] { if (processor.sampleSource.get() == nullptr) chooseFile(); else if (onOpenEditor) onOpenEditor(); };
     region.setInterceptsMouseClicks (true, false);
 
-    for (auto* b : { &imitateButton, &useButton, &waveButton, &editButton, &cancelButton })
+    for (auto* b : { &recreateButton, &imitateButton, &useButton, &waveButton, &editButton, &cleanButton, &recipeButton, &cancelButton })
     {
         b->horizontal = true;
         addAndMakeVisible (b);
     }
     addAndMakeVisible (loadButton);
-    imitateButton.colour = accent;  imitateButton.filled = true;
+    recreateButton.colour = accent; recreateButton.filled = true;
+    imitateButton.colour = accent;
     useButton.colour = accent2;     useButton.filled = true;
     waveButton.colour = warm;       waveButton.filled = true;
+    cleanButton.colour = accent2;
+    recipeButton.colour = accent;
 
+    recreateButton.onClick = [this]
+    {
+        const auto r = processor.recreateFromSample();
+        if (r == NebulaAudioProcessor::RecreateResult::Failed) message = "No pude analizar esa seccion.";
+        else if (r == NebulaAudioProcessor::RecreateResult::Imitating)
+            message = processor.lastProfile.inharmonic ? "Es un sonido inarmonico (campana/metal): lo armo con osciladores y FM..."
+                                                       : "No tiene una nota clara: lo armo con osciladores y ruido...";
+        else if (onSoundChanged) onSoundChanged();
+        update();
+    };
     imitateButton.onClick = [this] { processor.startImitation(); message = {}; update(); };
     useButton.onClick = [this]
     {
@@ -339,6 +352,8 @@ SamplePanel::SamplePanel (NebulaAudioProcessor& p) : processor (p), region (p, f
         else message = "No pude hacer una onda con ese audio.";
         update();
     };
+    cleanButton.onClick = [this] { if (onOpenCleaner) onOpenCleaner(); };
+    recipeButton.onClick = [this] { if (onOpenRecipe) onOpenRecipe(); };
     editButton.onClick = [this] { if (onOpenEditor) onOpenEditor(); };
     loadButton.onClick = [this] { chooseFile(); };
     cancelButton.onClick = [this] { processor.cancelImitation(); message = "Busqueda cancelada."; };
@@ -357,7 +372,7 @@ void SamplePanel::chooseFile()
 void SamplePanel::loadFile (const juce::File& f)
 {
     const auto error = processor.loadSample (f);
-    message = error.isNotEmpty() ? error : "Elige que hacer con el: imitar, usarlo o hacer una onda.";
+    message = error.isNotEmpty() ? error : "Recrear lo reconstruye con el sinte; Usar el sample lo toca tal cual.";
     update();
 }
 
@@ -366,14 +381,16 @@ void SamplePanel::update()
     shown = processor.sampleSource.get();
     const bool imitating = processor.isImitating();
     const bool has = shown != nullptr;
-    for (auto* b : { &imitateButton, &useButton, &waveButton, &editButton }) b->setEnabled (has && ! imitating);
+    for (auto* b : { &recreateButton, &imitateButton, &useButton, &waveButton, &editButton, &cleanButton }) b->setEnabled (has && ! imitating);
     cancelButton.setVisible (imitating);
     loadButton.setVisible (has);
 
     if (const int count = processor.imitationCount.load(); count != seenImitations)
     {
         seenImitations = count;
-        message = "Listo: parecido " + juce::String (juce::roundToInt (processor.lastSimilarity.load() * 100.0f)) + " %. Los brotes son versiones de ese sonido.";
+        message = juce::String (processor.recipeOrigin == NebulaAudioProcessor::RecipeOrigin::Recreated ? "Recreado" : "Listo")
+                  + ": parecido " + juce::String (juce::roundToInt (processor.lastSimilarity.load() * 100.0f))
+                  + " %. Toca cualquier nota; mira la receta para ver como esta hecho.";
         if (onSoundChanged) onSoundChanged();
     }
     repaint();
@@ -412,8 +429,12 @@ void SamplePanel::paint (juce::Graphics& g)
         g.setFont (juce::FontOptions (11.0f));
         const float root = shown->rootNote + processor.rootOffset();
         const double sel = (processor.regionEnd() - processor.regionStart()) * shown->length() / shown->sampleRate;
-        g.drawText ((shown->hasPitch ? juce::MidiMessage::getMidiNoteName (juce::roundToInt (root), true, true, 3) : juce::String ("sin tono"))
-                    + "  |  seccion " + juce::String (sel, 1) + " s", 0, 128, getWidth(), 16, juce::Justification::centredLeft, true);
+        juce::String tone = "sin tono";
+        if (shown->melodic && shown->keyTonic >= 0)
+            tone = juce::String (SoundProfiler::noteNames (shown->keyTonic)) + (shown->keyMinor ? " menor" : " mayor") + " (raiz " + SoundProfiler::noteName (root) + ")";
+        else if (shown->hasPitch)
+            tone = SoundProfiler::noteWithCents (root);
+        g.drawText (tone + "  |  " + juce::String (sel, 1) + " s", 0, 128, getWidth(), 16, juce::Justification::centredLeft, true);
     }
 
     // Estado
@@ -421,7 +442,7 @@ void SamplePanel::paint (juce::Graphics& g)
     if (processor.isImitating())
     {
         const float prog = processor.imitationProgress();
-        auto bar = juce::Rectangle<float> (0.0f, (float) imitateButton.getY() - 14.0f, (float) getWidth(), 6.0f);
+        auto bar = juce::Rectangle<float> (0.0f, (float) recreateButton.getY() - 10.0f, (float) getWidth(), 5.0f);
         g.setColour (track);
         g.fillRoundedRectangle (bar, 3.0f);
         g.setGradientFill (juce::ColourGradient (accent, bar.getX(), 0.0f, accent2, bar.getRight(), 0.0f, false));
@@ -445,11 +466,17 @@ void SamplePanel::resized()
     region.setBounds (dropArea());
     loadButton.setBounds (getWidth() - 26, 110, 26, 22);
     int y = 150;
-    for (auto* b : { &imitateButton, &useButton, &waveButton, &editButton })
+    recreateButton.setBounds (0, y, getWidth(), 36); y += 42;
+    for (auto* b : { &imitateButton, &useButton, &waveButton })
     {
-        b->setBounds (0, y, getWidth(), 32);
-        y += 38;
+        b->setBounds (0, y, getWidth(), 30);
+        y += 36;
     }
+    editButton.setBounds (0, y, getWidth() / 2 - 3, 30);
+    cleanButton.setBounds (getWidth() / 2 + 3, y, getWidth() - getWidth() / 2 - 3, 30);
+    y += 36;
+    recipeButton.setBounds (0, y, getWidth(), 30);
+    y += 36;
     cancelButton.setBounds (0, y + 6, 110, 26);
 }
 
@@ -462,6 +489,8 @@ GardenView::GardenView (NebulaAudioProcessor& p) : processor (p), garden (p.gard
     samplePanel.onSoundChanged = [this] { audition(); refreshButtons(); };
     samplePanel.onOpenEditor = [this] { if (onOpenSampleEditor) onOpenSampleEditor(); };
     samplePanel.framesForWave = [this] { return framesForWave ? framesForWave() : 32; };
+    samplePanel.onOpenCleaner = [this] { if (onOpenCleaner) onOpenCleaner(); };
+    samplePanel.onOpenRecipe = [this] { if (onOpenRecipe) onOpenRecipe(); };
 
     mutationSlider.setSliderStyle (juce::Slider::LinearHorizontal);
     mutationSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 44, 20);
@@ -485,11 +514,15 @@ GardenView::GardenView (NebulaAudioProcessor& p) : processor (p), garden (p.gard
     lockEnvButton.setClickingTogglesState (true);
     lockEnvButton.setToggleState (garden.lockEnvelope, juce::dontSendNotification);
     lockEnvButton.onClick = [this] { garden.lockEnvelope = lockEnvButton.getToggleState(); };
+    lockFilterButton.setClickingTogglesState (true);
+    lockFilterButton.setToggleState (garden.lockFilter, juce::dontSendNotification);
+    lockFilterButton.onClick = [this] { garden.lockFilter = lockFilterButton.getToggleState(); };
+    lockFilterButton.colour = accent2;
     listenButton.setClickingTogglesState (true);
     listenButton.setToggleState (true, juce::dontSendNotification);
     lockEnvButton.colour = listenButton.colour = accent2;
 
-    for (auto* b : { &germinateButton, &rerollButton, &randomButton, &backButton, &lockEnvButton, &listenButton })
+    for (auto* b : { &germinateButton, &rerollButton, &randomButton, &backButton, &lockEnvButton, &lockFilterButton, &listenButton })
         addAndMakeVisible (b);
 
     refreshButtons();
@@ -563,6 +596,7 @@ void GardenView::timerCallback()
         lastVersion = v;
         mutationSlider.setValue (garden.mutation, juce::dontSendNotification);
         lockEnvButton.setToggleState (garden.lockEnvelope, juce::dontSendNotification);
+        lockFilterButton.setToggleState (garden.lockFilter, juce::dontSendNotification);
         refreshButtons();
     }
     samplePanel.update();
@@ -598,5 +632,6 @@ void GardenView::resized()
         b->setBounds (bar.removeFromLeft (84).reduced (3, 0));
     bar.removeFromLeft (20);
     lockEnvButton.setBounds (bar.removeFromLeft (84).reduced (3, 0));
+    lockFilterButton.setBounds (bar.removeFromLeft (84).reduced (3, 0));
     listenButton.setBounds (bar.removeFromLeft (84).reduced (3, 0));
 }

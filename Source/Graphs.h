@@ -185,8 +185,8 @@ private:
     std::complex<double> response (int f, float hz) const
     {
         auto v = [this] (const char* id) { return getParamValue (proc.state, id); };
-        if (f == 1) return NebFilter::response (juce::roundToInt (v (ParamID::filterType)), juce::roundToInt (v (ParamID::filterSlope)), v (ParamID::cutoff), v (ParamID::resonance), hz);
-        return NebFilter::response (juce::roundToInt (v (ParamID::f2Type)), juce::roundToInt (v (ParamID::f2Slope)), v (ParamID::f2Cutoff), v (ParamID::f2Reso), hz);
+        if (f == 1) return NebFilter::response (juce::roundToInt (v (ParamID::filterType)), juce::roundToInt (v (ParamID::filterSlope)), v (ParamID::cutoff), v (ParamID::resonance), hz, juce::roundToInt (v (ParamID::filterChar)));
+        return NebFilter::response (juce::roundToInt (v (ParamID::f2Type)), juce::roundToInt (v (ParamID::f2Slope)), v (ParamID::f2Cutoff), v (ParamID::f2Reso), hz, juce::roundToInt (v (ParamID::f2Char)));
     }
 
     juce::Point<float> handle (int f) const

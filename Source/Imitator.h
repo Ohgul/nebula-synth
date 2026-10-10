@@ -101,6 +101,81 @@ private:
 };
 
 //==============================================================================
+// Preparar el objetivo y comparar (lo usan la imitación y "Recrear")
+namespace ImitationTools
+{
+    struct Target
+    {
+        SoundFeatures features;
+        double lengthS = 1.0;
+        int note = 60;
+        bool pitched = false;
+        float noteExact = 60.0f;
+    };
+
+    inline Target prepare (SoundAnalyser& analyser, const SampleData& smp, float rStart, float rEnd, float rootFix)
+    {
+        Target t;
+        const int fullLen = smp.length();
+        const int a0 = juce::jlimit (0, fullLen - 2, (int) (rStart * (float) fullLen));
+        const int a1 = juce::jlimit (a0 + 2, fullLen, (int) (rEnd * (float) fullLen));
+        const float* x = smp.data() + a0;
+        const int n = a1 - a0;
+        float peak = 0.0f;
+        for (int i = 0; i < n; ++i) peak = juce::jmax (peak, std::abs (x[i]));
+        int onset = 0;
+        while (onset < n - 1 && std::abs (x[onset]) < peak * 0.03f) ++onset;
+        int end = n - 1;
+        while (end > onset && std::abs (x[end]) < peak * 0.003f) --end;
+
+        t.lengthS = juce::jlimit (0.15, 2.5, (end - onset) / smp.sampleRate);
+        t.features = analyser.analyse (x + onset, n - onset, smp.sampleRate, t.lengthS);
+        t.pitched = smp.hasPitch;
+        t.noteExact = smp.hasPitch ? smp.rootNote + rootFix : 48.0f;
+        t.note = juce::jlimit (12, 115, juce::roundToInt (t.noteExact));
+        return t;
+    }
+
+    // Distancia del patch al objetivo, con castigo si la nota no es la misma
+    inline float distance (OfflineSynth& offline, SoundAnalyser& analyser, const Target& t, const Genome& g, std::vector<float>& audio)
+    {
+        constexpr double sr = 44100.0;
+        const int total = (int) (t.lengthS * sr) + 1024;
+        const int hold = (int) (t.lengthS * 0.85 * sr);
+        offline.setGenome (g);
+        offline.render (audio, t.note, hold, total, sr);
+        float pk = 0.0f;
+        for (auto v : audio) pk = juce::jmax (pk, std::abs (v));
+        if (pk < 1.0e-5f || ! std::isfinite (pk)) return 1000.0f;
+        const auto got = analyser.analyse (audio.data(), (int) audio.size(), sr, t.lengthS);
+        float d = SoundAnalyser::distance (t.features, got);
+
+        if (t.pitched)
+        {
+            const int win = juce::jmin ((int) audio.size() / 2, (int) (sr * 0.1));
+            const int start = juce::jmin ((int) audio.size() - win - 1, (int) (sr * juce::jmin (0.15, t.lengthS * 0.3)));
+            const float hz = start > 0 ? SampleTools::detectPitch (audio.data() + start, win, sr) : 0.0f;
+            const float want = 440.0f * std::exp2 (((float) t.note - 69.0f) / 12.0f);
+            if (hz <= 0.0f) d += 3.0f;
+            else
+            {
+                const float semis = std::abs (12.0f * std::log2 (hz / want));
+                if (semis > 0.6f) d += 6.0f + juce::jmin (6.0f, semis * 0.5f);   // otra nota u otra octava
+            }
+        }
+        return d;
+    }
+
+    inline float similarity (OfflineSynth& offline, const Genome& g, const SampleData& smp, float rStart, float rEnd, float rootFix)
+    {
+        SoundAnalyser analyser;
+        const auto t = prepare (analyser, smp, rStart, rEnd, rootFix);
+        std::vector<float> audio;
+        return SoundAnalyser::similarity (distance (offline, analyser, t, g, audio));
+    }
+}
+
+//==============================================================================
 // Busca, por evolución, el patch del sinte que más se parece a un sample.
 class Imitator : private juce::Thread
 {
@@ -113,8 +188,10 @@ public:
     // Duración de la búsqueda: generaciones × hijos por generación
     int generations = 40, childrenPerGeneration = 24, elites = 8;
 
-    void start (std::shared_ptr<const SampleData> sample, const Genome& current, float regionStart, float regionEnd, float rootOffset)
+    void start (std::shared_ptr<const SampleData> sample, const Genome& current, float regionStart, float regionEnd, float rootOffset,
+                std::vector<std::pair<juce::String, float>> seedValues = {})
     {
+        seeds = std::move (seedValues);
         stopThread (4000);
         target = std::move (sample);
         rStart = regionStart; rEnd = regionEnd; rootFix = rootOffset;
@@ -139,42 +216,18 @@ public:
 private:
     void run() override
     {
-        constexpr double sr = 44100.0;
         OfflineSynth offline (processor.getParameters(), ops.parameters(), bank);
         SoundAnalyser analyser;
 
         // ---- Preparar el objetivo: la región elegida, desde el ataque, hasta 2.5 s ----
-        const int fullLen = target->length();
-        const int a0 = juce::jlimit (0, fullLen - 2, (int) (rStart * (float) fullLen));
-        const int a1 = juce::jlimit (a0 + 2, fullLen, (int) (rEnd * (float) fullLen));
-        const float* x = target->data() + a0;
-        const int n = a1 - a0;
-        float peak = 0.0f;
-        for (int i = 0; i < n; ++i) peak = juce::jmax (peak, std::abs (x[i]));
-        int onset = 0;
-        while (onset < n - 1 && std::abs (x[onset]) < peak * 0.03f) ++onset;
-        int end = n - 1;
-        while (end > onset && std::abs (x[end]) < peak * 0.003f) --end;
-
-        const double lengthS = juce::jlimit (0.15, 2.5, (end - onset) / target->sampleRate);
-        const SoundFeatures want = analyser.analyse (x + onset, n - onset, target->sampleRate, lengthS);
-
-        renderNote = target->hasPitch ? (float) juce::roundToInt (target->rootNote + rootFix) : 48.0f;
-        const int note = juce::jlimit (12, 115, (int) renderNote);
-        const int total = (int) (lengthS * sr) + 1024;
-        const int hold = (int) (lengthS * 0.85 * sr);
+        const auto want = ImitationTools::prepare (analyser, *target, rStart, rEnd, rootFix);
+        renderNote = (float) want.note;
 
         std::vector<float> audio;
         auto evaluate = [&] (Genome& g) -> float
         {
             ops.setReal (g, ParamID::engine, 0.0f); // siempre con el motor de sinte
-            offline.setGenome (g);
-            offline.render (audio, note, hold, total, sr);
-            float pk = 0.0f;
-            for (auto v : audio) pk = juce::jmax (pk, std::abs (v));
-            if (pk < 1.0e-5f || ! std::isfinite (pk)) return 1000.0f;
-            const auto got = analyser.analyse (audio.data(), (int) audio.size(), sr, lengthS);
-            return SoundAnalyser::distance (want, got);
+            return ImitationTools::distance (offline, analyser, want, g, audio);
         };
 
         // ---- Población inicial: sonido actual, presets y variantes al azar ----
@@ -182,6 +235,16 @@ private:
         auto add = [&] (Genome g) { ops.sanitize (g); const float d = evaluate (g); pop.push_back ({ d, std::move (g) }); };
 
         add (startGenome);
+        // Punto de partida sacado del análisis (onda, filtro, envolventes, vibrato)
+        if (! seeds.empty())
+        {
+            Genome g = startGenome;
+            for (auto& [id, v] : seeds) ops.setReal (g, id, v);
+            for (int s = 0; s < ModSrc::count; ++s)
+                for (int d = 0; d < ModDst::count; ++d) ops.setReal (g, matrixID (s, d), 0.0f);
+            add (g);
+            for (int k = 0; k < 6; ++k) add (ops.mutate (g, 0.25f, false));
+        }
         const auto& presets = factoryPresets();
         for (int p = 0; p < (int) presets.size(); ++p)
             add (presetGenome (p));
@@ -251,6 +314,7 @@ private:
     const WavetableBank& bank;
     float rStart = 0.0f, rEnd = 1.0f, rootFix = 0.0f;
     std::shared_ptr<const SampleData> target;
+    std::vector<std::pair<juce::String, float>> seeds;
     Genome startGenome, best;
     float renderNote = 48.0f;
     juce::CriticalSection resultLock;

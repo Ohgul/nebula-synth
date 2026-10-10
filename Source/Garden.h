@@ -152,6 +152,7 @@ public:
         t.setProperty ("generation", generation, nullptr);
         t.setProperty ("mutation", mutation, nullptr);
         t.setProperty ("lockEnv", lockEnvelope, nullptr);
+        t.setProperty ("lockFilter", lockFilter, nullptr);
         t.setProperty ("genes", (int) ops.size(), nullptr);
     }
 
@@ -175,6 +176,7 @@ public:
         generation   = (int) t.getProperty ("generation", 1);
         mutation     = (float) t.getProperty ("mutation", 0.5f);
         lockEnvelope = (bool) t.getProperty ("lockEnv", false);
+        lockFilter   = (bool) t.getProperty ("lockFilter", false);
         history.clear();
         changed();
     }
@@ -187,6 +189,7 @@ public:
     int generation = 1;
     float mutation = 0.5f;
     bool lockEnvelope = false;
+    bool lockFilter = false;
 
     std::atomic<int> version { 0 }; // la interfaz lo vigila para redibujar
     juce::CriticalSection lock;
@@ -215,7 +218,7 @@ private:
             // Cada brote muta un poco más que el anterior: alrededor del círculo
             // van de "primo cercano" a "pariente lejano".
             const float amt = mutation * (0.3f + 0.7f * (float) k / (float) (numSprouts - 1));
-            sprouts[(size_t) k] = ops.mutate (seed, juce::jmax (0.04f, amt), lockEnvelope);
+            sprouts[(size_t) k] = ops.mutate (seed, juce::jmax (0.04f, amt), lockEnvelope, lockFilter);
             distances[(size_t) k] = GenomeOps::distance (seed, sprouts[(size_t) k]);
         }
     }

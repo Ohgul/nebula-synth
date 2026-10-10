@@ -20,7 +20,8 @@ public:
     {
         return id == ParamID::master || id == ParamID::polyMode || id == ParamID::voiceCount
             || id == ParamID::glide || id == ParamID::bendRange || id == ParamID::velSens
-            || id == ParamID::smpPlayMode || id == ParamID::smpBeats;
+            || id == ParamID::smpPlayMode || id == ParamID::smpBeats
+            || id == ParamID::lfoOn || id == ParamID::lfo2On;
     }
 
     explicit GenomeOps (const juce::AudioProcessor& proc, juce::int64 seed = juce::Time::currentTimeMillis())
@@ -62,7 +63,7 @@ public:
     bool isSamplerGenome (const Genome& g) const { return real (g, ParamID::engine) > 0.5f; }
 
     //==========================================================================
-    Genome mutate (const Genome& parent, float amt, bool lockEnv)
+    Genome mutate (const Genome& parent, float amt, bool lockEnv, bool lockFilter = false)
     {
         Genome g = parent;
         const bool sampler = isSamplerGenome (g);
@@ -75,6 +76,7 @@ public:
 
             if (id == ParamID::engine) continue;
             if (lockEnv && isEnvelopeGene (id)) continue;
+            if (lockFilter && isFilterGene (id)) continue;
             if (sampler && isOscillatorGene (id)) continue;      // en modo sample no tienen efecto
             if (! sampler && isSampleGene (id)) continue;
 
@@ -274,6 +276,14 @@ private:
     static bool isEnvelopeGene (const juce::String& id)
     {
         return id == ParamID::ampA || id == ParamID::ampD || id == ParamID::ampS || id == ParamID::ampR || id == ParamID::ampCurve;
+    }
+
+    static bool isFilterGene (const juce::String& id)
+    {
+        return id.startsWith ("filter") || id.startsWith ("f2") || id == ParamID::cutoff || id == ParamID::resonance
+            || id == ParamID::drive || id == ParamID::lfoFilter
+            || (id.startsWith ("m") && (id.endsWith ("_" + juce::String (ModDst::Cutoff1)) || id.endsWith ("_" + juce::String (ModDst::Reso1))
+                                        || id.endsWith ("_" + juce::String (ModDst::Cutoff2))));
     }
 
     static bool isOscillatorGene (const juce::String& id)

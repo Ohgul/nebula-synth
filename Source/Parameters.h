@@ -22,6 +22,7 @@ namespace ParamID
     inline constexpr const char* subLevel   = "subLevel";
     inline constexpr const char* fmAmount   = "fmAmount";
     inline constexpr const char* noise      = "noise";
+    inline constexpr const char* noiseColor = "noiseColor";
 
     // Unísono
     inline constexpr const char* uniVoices  = "uniVoices";
@@ -82,6 +83,8 @@ namespace ParamID
     inline constexpr const char* lfo2Sync   = "lfo2Sync";
     inline constexpr const char* lfo2Retrig = "lfo2Retrig";
     inline constexpr const char* lfo2Fade   = "lfo2Fade";
+    inline constexpr const char* lfoOn      = "lfoOn";
+    inline constexpr const char* lfo2On     = "lfo2On";
 
     // Matriz (globales; las celdas se nombran con matrixID())
     inline constexpr const char* modTime   = "modTime";
@@ -104,6 +107,8 @@ namespace ParamID
     inline constexpr const char* smpGrain   = "smpGrain";
     inline constexpr const char* smpPlayMode = "smpPlayMode";
     inline constexpr const char* smpBeats    = "smpBeats";
+    inline constexpr const char* smpGrainAmt  = "smpGrainAmt";
+    inline constexpr const char* smpGrainType = "smpGrainType";
 
     inline constexpr const char* master = "master";
 }
@@ -131,11 +136,13 @@ inline const juce::StringArray& filterNames()
     return n;
 }
 inline const juce::StringArray& slopeNames()    { static const juce::StringArray n { "12 dB", "24 dB" }; return n; }
-inline const juce::StringArray& charNames()     { static const juce::StringArray n { "Limpio", "Calido", "Saturado" }; return n; }
+inline const juce::StringArray& charNames()     { static const juce::StringArray n { "Limpio", "Moog", "Moog +" }; return n; }
 inline const juce::StringArray& routingNames()  { static const juce::StringArray n { "Serie", "Paralelo" }; return n; }
 inline const juce::StringArray& envModeNames()  { static const juce::StringArray n { "Normal", "Loop" }; return n; }
 inline const juce::StringArray& lfoShapeNames() { static const juce::StringArray n { "Seno", "Triangulo", "Sierra", "Cuadrada", "Aleatorio", "Aleatorio suave" }; return n; }
 inline const juce::StringArray& polyNames()     { static const juce::StringArray n { "Poli", "Mono", "Legato" }; return n; }
+namespace GrainType { enum { Smooth, Sharp, Scatter, Reverse, Octave, count }; }
+inline const juce::StringArray& grainTypeNames() { static const juce::StringArray n { "Suave", "Nitido", "Disperso", "Reversa", "Octava" }; return n; }
 inline const juce::StringArray& engineNames()   { static const juce::StringArray n { "Sinte", "Sample" }; return n; }
 inline const juce::StringArray& onOffNames()    { static const juce::StringArray n { "No", "Si" }; return n; }
 inline const juce::StringArray& playModeNames() { static const juce::StringArray n { "Clasico", "Tempo" }; return n; }
@@ -157,7 +164,7 @@ inline double syncBeats (int index)   // duración de un ciclo en negras
 // ---------------------------------------------------------------------------
 // Matriz de modulación: fuentes × destinos
 namespace ModSrc { enum { Env2, Env3, Lfo1, Lfo2, Velocity, ModWheel, Aftertouch, KeyTrack, count }; }
-namespace ModDst { enum { Pitch, Shape1, Shape2, Mix, Fm, Cutoff1, Reso1, Cutoff2, Volume, Pan, count }; }
+namespace ModDst { enum { Pitch, Shape1, Shape2, Mix, Fm, Cutoff1, Reso1, Cutoff2, Volume, Pan, Noise, count }; }
 
 inline const juce::StringArray& modSrcNames()
 {
@@ -166,7 +173,7 @@ inline const juce::StringArray& modSrcNames()
 }
 inline const juce::StringArray& modDstNames()
 {
-    static const juce::StringArray n { "Tono", "Forma 1", "Forma 2", "Mezcla", "FM", "Corte 1", "Reso 1", "Corte 2", "Volumen", "Paneo" };
+    static const juce::StringArray n { "Tono", "Forma 1", "Forma 2", "Mezcla", "FM", "Corte 1", "Reso 1", "Corte 2", "Volumen", "Paneo", "Ruido" };
     return n;
 }
 inline juce::String matrixID (int src, int dst) { return "m" + juce::String (src) + "_" + juce::String (dst); }
@@ -229,6 +236,8 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
     add (new F ({ ParamID::subLevel, 1 }, "Sub", unit, 0.0f, pct));
     add (new F ({ ParamID::fmAmount, 1 }, "FM", unit, 0.0f, pct));
     add (new F ({ ParamID::noise, 1 }, "Ruido", unit, 0.0f, pct));
+    add (new F ({ ParamID::noiseColor, 1 }, "Ruido Color", unit, 1.0f, Attr().withStringFromValueFunction ([] (float v, int)
+         { return v > 0.995f ? juce::String ("Blanco") : ParamFormat::hertz (200.0f * std::pow (100.0f, v), 0); })));
 
     add (new I ({ ParamID::uniVoices, 1 }, "Unisono Voces", 1, 7, 1));
     add (new F ({ ParamID::uniDetune, 1 }, "Unisono Desafinacion", unit, 0.25f, pct));
@@ -292,6 +301,8 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
     add (new C ({ ParamID::lfo2Sync, 1 }, "LFO 2 Sync", syncNames(), 0));
     add (new B ({ ParamID::lfo2Retrig, 1 }, "LFO 2 Reinicio", false));
     add (new F ({ ParamID::lfo2Fade, 1 }, "LFO 2 Entrada", fadeRange, 0.0f, tAttr));
+    add (new B ({ ParamID::lfoOn, 1 }, "LFO 1 Encendido", true));
+    add (new B ({ ParamID::lfo2On, 1 }, "LFO 2 Encendido", true));
 
     // ---- Matriz ----
     for (int s = 0; s < ModSrc::count; ++s)
@@ -324,6 +335,8 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
     add (new F ({ ParamID::smpGrain, 1 }, "Sample Grano", grainRange, 0.08f, tAttr));
     add (new C ({ ParamID::smpPlayMode, 1 }, "Sample Reproduccion", playModeNames(), 0));
     add (new C ({ ParamID::smpBeats, 1 }, "Sample Duracion", beatNames(), 0));
+    add (new F ({ ParamID::smpGrainAmt, 1 }, "Sample Granos Cantidad", unit, 0.0f, pct));
+    add (new C ({ ParamID::smpGrainType, 1 }, "Sample Granos Tipo", grainTypeNames(), 0));
 
     add (new F ({ ParamID::master, 1 }, "Volumen", NormalisableRange<float> (-60.0f, 6.0f), -6.0f, Attr().withStringFromValueFunction (ParamFormat::decibels)));
 
@@ -347,6 +360,7 @@ namespace P
         lfo2Rate, lfo2Shape, lfo2Sync, lfo2Retrig, lfo2Fade,
         modTime, modAmount, polyMode, voiceCount, glide, bendRange, velSens,
         engine, smpStart, smpTune, smpReverse, smpLoop, smpTexture, smpGrain, smpPlayMode, smpBeats,
+        lfoOn, lfo2On, smpGrainAmt, smpGrainType, noiseColor,
         count
     };
 
@@ -365,7 +379,8 @@ namespace P
             ParamID::lfo2Rate, ParamID::lfo2Shape, ParamID::lfo2Sync, ParamID::lfo2Retrig, ParamID::lfo2Fade,
             ParamID::modTime, ParamID::modAmount, ParamID::polyMode, ParamID::voiceCount, ParamID::glide, ParamID::bendRange, ParamID::velSens,
             ParamID::engine, ParamID::smpStart, ParamID::smpTune, ParamID::smpReverse, ParamID::smpLoop, ParamID::smpTexture, ParamID::smpGrain,
-            ParamID::smpPlayMode, ParamID::smpBeats
+            ParamID::smpPlayMode, ParamID::smpBeats,
+            ParamID::lfoOn, ParamID::lfo2On, ParamID::smpGrainAmt, ParamID::smpGrainType, ParamID::noiseColor
         };
         static_assert (sizeof (list) / sizeof (list[0]) == count, "lista de parámetros incompleta");
         return list;

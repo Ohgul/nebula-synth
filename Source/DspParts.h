@@ -305,40 +305,61 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// Filtro de estado variable (Simper), 12 o 24 dB, con carácter
+// Filtro.
+//  · Limpio  : SVF lineal (Butterworth en 24 dB). Transparente: ganancia 1 en la
+//              banda que pasa y, totalmente abierto, deja la señal intacta.
+//  · Moog    : escalera de 4 polos tipo Moog (ZDF) con saturación suave y
+//              compensación de graves (no se "adelgaza" al subir la resonancia).
+//  · Moog +  : la misma escalera empujada más fuerte: más color y grasa.
 class NebFilter
 {
 public:
-    void reset() { for (auto& s : st) s = {}; }
+    enum Character { Clean = 0, Moog = 1, MoogHot = 2 };
+
+    void reset() { for (auto& s : st) s = {}; for (auto& s : lad) s = 0.0; openMix = target; }
 
     void set (int kind, int slope, int character, float cutoffHz, float resonance, double sr)
     {
         type = kind;
         twoStages = slope == 1;
-        charMode = character;
+        charMode = juce::jlimit (0, 2, character);
+        reso = juce::jlimit (0.0f, 1.0f, resonance);
         const double fc = juce::jlimit (16.0, sr * 0.45, (double) cutoffHz);
         g = std::tan (juce::MathConstants<double>::pi * fc / sr);
-        const double q = 0.707 * std::pow (14.0, juce::jlimit (0.0f, 1.0f, resonance));
-        k = 1.0 / q;
-        kFirst = twoStages ? 1.0 / 0.54 : k;   // 1ª etapa suave en 24 dB
+        k = 1.0 / qFor (reso);
+        kFirst = twoStages ? 1.0 / 0.5412 : k;    // Butterworth de 4º orden: Q 0.54 y 1.31
+        if (twoStages && reso < 0.02f) k = 1.0 / 1.3066;
+        G = g / (1.0 + g);
+        kLad = 3.96 * std::pow ((double) reso, 0.9);
+
+        // Totalmente abierto (pasa bajos, sin resonancia): sin filtro = transparencia total
+        const bool open = type == FilterKind::LowPass && cutoffHz > 17500.0f && reso < 0.05f;
+        target = open ? 1.0f : 0.0f;
     }
 
     float process (float x)
     {
-        if (twoStages)
-        {
-            x = stage (st[0], x, kFirst);
-            return stage (st[1], x, k);
-        }
-        return stage (st[0], x, k);
+        float y = charMode == Clean ? processSvf (x) : processLadder (x);
+        openMix += (target - openMix) * 0.002f;
+        if (openMix > 1.0e-4f) y += (x - y) * openMix;
+        return y;
     }
 
-    static std::complex<double> response (int kind, int slope, float cutoffHz, float resonance, float hz)
+    // Respuesta en frecuencia (para dibujar la curva)
+    static std::complex<double> response (int kind, int slope, float cutoffHz, float resonance, float hz, int character = 0)
     {
-        const double q = 0.707 * std::pow (14.0, juce::jlimit (0.0f, 1.0f, resonance));
+        const std::complex<double> s (0.0, hz / cutoffHz);
+        if (character != Clean)
+        {
+            const double kl = 3.96 * std::pow ((double) juce::jlimit (0.0f, 1.0f, resonance), 0.9);
+            const auto p = 1.0 / (1.0 + s);
+            const auto u = 1.0 / (1.0 + kl * p * p * p * p);
+            const auto y1 = u * p, y2 = y1 * p, y3 = y2 * p, y4 = y3 * p;
+            return u * ladderMix (kind, slope == 1, std::complex<double> (1.0), y1 / u, y2 / u, y3 / u, y4 / u) * ladderComp (kind, kl);
+        }
+        const double q = qFor (resonance);
         auto one = [&] (double kk) -> std::complex<double>
         {
-            const std::complex<double> s (0.0, hz / cutoffHz);
             const std::complex<double> den = s * s + kk * s + 1.0;
             switch (kind)
             {
@@ -348,20 +369,70 @@ public:
                 default:                   return 1.0 / den;
             }
         };
-        auto h = one (1.0 / q);
-        if (slope == 1) h *= one (1.0 / 0.54);
-        return h;
+        if (slope == 1)
+            return one (1.0 / 0.5412) * one (resonance < 0.02f ? 1.0 / 1.3066 : 1.0 / q);
+        return one (1.0 / q);
     }
 
 private:
+    static double qFor (float r) { return 0.707 * std::pow (14.0, (double) juce::jlimit (0.0f, 1.0f, r)); }
+
+    template <typename T>
+    static T ladderMix (int kind, bool fourPole, T x, T y1, T y2, T y3, T y4)
+    {
+        switch (kind)
+        {
+            case FilterKind::HighPass: return fourPole ? x - 4.0 * y1 + 6.0 * y2 - 4.0 * y3 + y4 : x - 2.0 * y1 + y2;
+            case FilterKind::BandPass: return fourPole ? 4.0 * (y2 - 2.0 * y3 + y4) : 2.0 * (y1 - y2);
+            case FilterKind::Notch:    return fourPole ? x - 4.0 * y1 + 6.0 * y2 - 4.0 * y3 + 2.0 * y4 : x - 2.0 * y1 + 2.0 * y2;
+            default:                   return fourPole ? y4 : y2;
+        }
+    }
+
+    // Compensa la pérdida de graves de la escalera al subir la resonancia
+    static double ladderComp (int kind, double kl)
+    {
+        return (kind == FilterKind::LowPass || kind == FilterKind::BandPass || kind == FilterKind::Notch) ? 1.0 + kl : 1.0;
+    }
+
+    float processLadder (float xin)
+    {
+        const double drv = charMode == MoogHot ? 2.6 : 1.15;
+        const double x = xin;
+        // Solución sin retardo de la realimentación (lineal) y luego saturación suave
+        const double S = G * G * G * (1.0 - G) * lad[0] + G * G * (1.0 - G) * lad[1] + G * (1.0 - G) * lad[2] + (1.0 - G) * lad[3];
+        const double G4 = G * G * G * G;
+        const double y4est = (G4 * x + S) / (1.0 + kLad * G4);
+        double u = x - kLad * y4est;
+        u = std::tanh (u * drv) / drv;
+
+        double y[4], in = u;
+        for (int i = 0; i < 4; ++i)
+        {
+            const double v = (in - lad[i]) * G;
+            y[i] = v + lad[i];
+            lad[i] = y[i] + v;
+            if (charMode == MoogHot && i < 3) y[i] = std::tanh (y[i] * 1.2) / 1.2;   // un poco de "transistor" entre etapas
+            in = y[i];
+        }
+        const double out = ladderMix (type, twoStages, u, y[0], y[1], y[2], y[3]) * ladderComp (type, kLad);
+        return (float) (charMode == MoogHot ? out * 1.12 : out);
+    }
+
+    float processSvf (float x)
+    {
+        if (twoStages)
+        {
+            x = stage (st[0], x, kFirst);
+            return stage (st[1], x, k);
+        }
+        return stage (st[0], x, k);
+    }
+
     struct State { double ic1 = 0.0, ic2 = 0.0; };
 
     float stage (State& s, float x, double kk)
     {
-        // Carácter: saturación suave a la entrada de cada etapa
-        if (charMode == 1)      x = std::tanh (x * 1.4f) / 1.4f * 1.15f;
-        else if (charMode == 2) x = std::tanh (x * 3.5f) / 1.6f;
-
         const double a1 = 1.0 / (1.0 + g * (g + kk));
         const double a2 = g * a1, a3 = g * a2;
         const double v3 = x - s.ic2;
@@ -381,7 +452,9 @@ private:
     }
 
     std::array<State, 2> st;
-    double g = 0.1, k = 1.4, kFirst = 1.4;
+    std::array<double, 4> lad {};
+    double g = 0.1, k = 1.4, kFirst = 1.4, G = 0.09, kLad = 0.0;
+    float reso = 0.0f, openMix = 0.0f, target = 0.0f;
     int type = 0, charMode = 0;
     bool twoStages = false;
 };

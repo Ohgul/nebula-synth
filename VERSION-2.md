@@ -83,3 +83,19 @@ Sugerencias (por confirmar):
 - [x] La detección de nota falla con sonidos inarmónicos (campanas). Agregar un control para corregir la nota raíz a mano, en semitonos y cents.
 - [x] Guardar el sample dentro del proyecto, para que no se pierda si mueves el archivo.
 - [x] Presets de usuario: guardar y cargar tus propios sonidos.
+
+
+## Versión 2.1 (hecha)
+- [x] Recrear sonido por resíntesis: nota exacta, tabla de armónicos en el tiempo, ruido y envolventes, vibrato.
+- [x] Receta del sonido: análisis, cómo se recreó, cómo hacerlo en cualquier sinte y el patch actual.
+- [x] Tono exacto (cents) y tonalidad de frases melódicas: C# es C#.
+- [x] Limpiar: Nota principal, Parte tonal, Solo golpes, Sin ruido, Graves, Medios y Agudos, con Rescatar este e historial.
+- [x] Filtros tipo Moog: Limpio transparente, Moog y Moog+ (botón de color). Fijar filtro en el Jardín.
+- [x] Botón de encendido para LFO 1 y LFO 2.
+- [x] Arrastrar un audio al oscilador para la tabla Usuario.
+- [x] Granos en el Sample: cantidad y tipo.
+- [x] Color del ruido y el ruido como destino de la matriz.
+
+Pendiente:
+- [ ] Separación de instrumentos con modelos entrenados (voz, batería, bajo), como los separadores de stems. Limpiar hoy trabaja analizando el espectro.
+- [ ] Recrear frases melódicas completas como secuencia de notas. Hoy Recrear toma su timbre; para tocar la frase sincronizada usa el Sample en modo Tempo.

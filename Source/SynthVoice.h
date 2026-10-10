@@ -87,6 +87,8 @@ public:
             playhead = 0.0;
             grainTimer = 0;
             for (auto& g : grains) g.active = false;
+            for (auto& g : cloud) g.active = false;
+            cloudTimer = 0;
             newestGrain = -1;
         }
 
@@ -242,8 +244,9 @@ private:
 
     void controlUpdate (int sampleIndex)
     {
-        const float l1 = runLfo (lfo1, P::lfoRate, P::lfoShape, P::lfoSync, P::lfoRetrig, P::lfoFade, sampleIndex);
-        const float l2 = runLfo (lfo2, P::lfo2Rate, P::lfo2Shape, P::lfo2Sync, P::lfo2Retrig, P::lfo2Fade, sampleIndex);
+        // Un LFO apagado no mueve nada (ni sus perillas directas ni la matriz)
+        const float l1 = params[P::lfoOn]  > 0.5f ? runLfo (lfo1, P::lfoRate, P::lfoShape, P::lfoSync, P::lfoRetrig, P::lfoFade, sampleIndex) : 0.0f;
+        const float l2 = params[P::lfo2On] > 0.5f ? runLfo (lfo2, P::lfo2Rate, P::lfo2Shape, P::lfo2Sync, P::lfo2Retrig, P::lfo2Fade, sampleIndex) : 0.0f;
 
         // ---- Matriz ----
         const float src[ModSrc::count] { env2Val, env3Val, l1, l2, velocity, ctx.modWheel.load(),
@@ -277,6 +280,17 @@ private:
         fm       = juce::jlimit (0.0f, 1.0f, params[P::fmAmount] + m[ModDst::Fm]);
         subLvl   = params[P::subLevel];
         noiseLvl = params[P::noise];
+        noiseMod = juce::jlimit (0.0f, 1.0f, m[ModDst::Noise]);
+        {
+            const float col = params[P::noiseColor];
+            if (col > 0.995f) noiseLp = 1.0f;
+            else
+            {
+                const double fc = 200.0 * std::pow (100.0, (double) col);
+                noiseLp = (float) (1.0 - std::exp (-juce::MathConstants<double>::twoPi * fc / sr));
+                noiseGain = noiseGainFor (noiseLp);
+            }
+        }
 
         // ---- Frecuencias (con unísono) ----
         const float detune = params[P::uniDetune] * 0.6f;   // semitonos a cada lado
@@ -319,6 +333,9 @@ private:
         gainR = juce::jmin (1.0f, 1.0f + pan);
     }
 
+    // Ganancia para que el ruido filtrado conserve el mismo volumen (rms) que el blanco
+    static float noiseGainFor (float a) { return std::sqrt ((2.0f - a) / juce::jmax (1.0e-4f, a)); }
+
     static double noteHz (double note) { return 440.0 * std::exp2 ((note - 69.0) / 12.0); }
 
     void generate (float& L, float& R)
@@ -327,7 +344,17 @@ private:
         if (sampler)
         {
             const double ratio = std::exp2 ((samplePitch - (sample->rootNote + ctx.rootOffset.load()) + smpTune) / 12.0) * sample->sampleRate / sr;
-            centre = 2.0f * ((tempoMode || smpTexture > 0.01f) ? nextGranular (ratio) : nextSample (ratio));
+            const float main = 2.0f * ((tempoMode || smpTexture > 0.01f) ? nextGranular (ratio) : nextSample (ratio));
+            if (grainAmt > 0.001f)
+            {
+                // Capa de granos encima del sonido: "Cantidad" mezcla y hace más densa la nube
+                float cl = 0.0f, cr = 0.0f;
+                nextCloud (ratio, cl, cr);
+                centre = main * (1.0f - 0.65f * grainAmt);
+                L += 2.0f * grainAmt * cl;
+                R += 2.0f * grainAmt * cr;
+            }
+            else centre = main;
         }
         else
         {
@@ -347,13 +374,70 @@ private:
         centre += sub.next (Wave::Sine, 0.0f, nullptr) * subLvl;
         L += centre; R += centre;
 
-        if (noiseLvl > 0.0f)
+        if (noiseLvl > 0.0f || noiseMod > 0.0f)
         {
-            const float n = (random.nextFloat() * 2.0f - 1.0f) * noiseLvl * 1.2f;
-            L = L * (1.0f - noiseLvl) + n;
-            R = R * (1.0f - noiseLvl) + n;
+            float n = random.nextFloat() * 2.0f - 1.0f;
+            if (noiseLp < 0.999f) { noiseState += noiseLp * (n - noiseState); n = noiseState * noiseGain; }   // color del ruido
+            const float base = n * noiseLvl * 1.2f;
+            L = L * (1.0f - noiseLvl) + base + n * noiseMod * 1.2f;   // la parte modulada se suma sin bajar el resto
+            R = R * (1.0f - noiseLvl) + base + n * noiseMod * 1.2f;
         }
         L *= 0.5f; R *= 0.5f;
+    }
+
+    // ------------------------------------------------------------------
+    // Nube de granos (Sample → Granos: Cantidad y Tipo)
+    struct CloudGrain { bool active = false; double pos = 0.0, inc = 1.0; int age = 0, length = 1; float gl = 0.7f, gr = 0.7f; };
+
+    void nextCloud (double ratio, float& outL, float& outR)
+    {
+        const double rate = 8.0 + 70.0 * grainAmt * grainAmt;   // granos por segundo
+        const int baseLen = juce::jmax (32, grainLenOut);
+        if (--cloudTimer <= 0)
+        {
+            cloudTimer = juce::jmax (1, (int) (sr / rate * (0.5 + random.nextDouble())));
+            for (auto& g : cloud)
+            {
+                if (g.active) continue;
+                const double srcRate = sample->sampleRate;
+                double pos = playhead, inc = ratio, pan = (random.nextFloat() * 2.0f - 1.0f) * 0.3f * grainAmt;
+                int len = baseLen;
+                switch (grainType)
+                {
+                    case GrainType::Sharp:   pos += (random.nextDouble() * 2.0 - 1.0) * 0.005 * srcRate; break;
+                    case GrainType::Scatter:
+                        pos = random.nextDouble() * regionLen;
+                        inc = ratio * std::exp2 ((random.nextDouble() * 2.0 - 1.0) * 0.25 / 12.0);
+                        pan = (random.nextFloat() * 2.0f - 1.0f) * 0.95f;
+                        len = juce::jmax (32, (int) (baseLen * (0.5 + random.nextDouble())));
+                        break;
+                    case GrainType::Reverse: inc = -ratio; pos += baseLen * ratio + (random.nextDouble() * 2.0 - 1.0) * 0.015 * srcRate; break;
+                    case GrainType::Octave:  inc = ratio * (random.nextFloat() < 0.75f ? 2.0 : 1.5); pos += (random.nextDouble() * 2.0 - 1.0) * 0.01 * srcRate; break;
+                    default:                 pos += (random.nextDouble() * 2.0 - 1.0) * 0.015 * srcRate; break;
+                }
+                if (smpLoop) { pos = std::fmod (pos, regionLen); if (pos < 0.0) pos += regionLen; }
+                g = { true, juce::jmax (0.0, pos), inc, 0, len,
+                      std::sqrt (0.5f * (1.0f - (float) pan)), std::sqrt (0.5f * (1.0f + (float) pan)) };
+                break;
+            }
+        }
+
+        const float overlap = (float) juce::jmax (1.0, rate * baseLen / sr);
+        const float norm = 1.0f / std::sqrt (overlap);
+        for (auto& g : cloud)
+        {
+            if (! g.active) continue;
+            const float t = (float) g.age / (float) g.length;
+            float w;
+            if (grainType == GrainType::Sharp)
+                w = (t < 0.03f ? t / 0.03f : std::exp (-6.0f * (t - 0.03f)));
+            else
+                w = 0.5f - 0.5f * std::cos (juce::MathConstants<float>::twoPi * t);
+            const float v = readRegion (g.pos) * w * norm * 1.41421f;
+            outL += v * g.gl; outR += v * g.gr;
+            g.pos += g.inc;
+            if (++g.age >= g.length) g.active = false;
+        }
     }
 
     // ------------------------------------------------------------------
@@ -374,6 +458,8 @@ private:
         smpLoop      = params[P::smpLoop] > 0.5f;
         smpTexture   = params[P::smpTexture];
         grainLenOut  = juce::jmax (16, (int) (params[P::smpGrain] * sr));
+        grainAmt     = params[P::smpGrainAmt];
+        grainType    = params.i (P::smpGrainType);
 
         // Modo Tempo: la sección dura N tiempos al BPM del proyecto
         tempoMode = params.i (P::smpPlayMode) == 1;
@@ -527,6 +613,10 @@ private:
     double tempoSpeed = 1.0;
     int grainLenOut = 1000, grainTimer = 0;
     std::array<Grain, 8> grains;
+    std::array<CloudGrain, 32> cloud;
+    float noiseMod = 0.0f, noiseLp = 1.0f, noiseGain = 1.0f, noiseState = 0.0f;
+    int cloudTimer = 0, grainType = 0;
+    float grainAmt = 0.0f;
     int newestGrain = -1;
 };
 

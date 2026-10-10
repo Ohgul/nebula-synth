@@ -5,6 +5,7 @@
 #include "GardenView.h"
 #include "Views.h"
 #include "SampleEditor.h"
+#include "Panels.h"
 
 // Contenido de la ventana (tamaño de diseño fijo; se escala con el zoom)
 class NebulaContent : public juce::Component, private juce::Timer
@@ -31,13 +32,16 @@ private:
     juce::ComboBox presetBox, zoomBox;
     IconButton prevButton { "", Icons::back(), "Preset anterior" }, nextButton { "", Icons::play(), "Preset siguiente" },
                saveButton { "", Icons::save(), "Guardar tu sonido como preset" },
-               folderButton { "", Icons::folder(), "Abrir la carpeta de tus presets" };
+               folderButton { "", Icons::folder(), "Abrir la carpeta de tus presets" },
+               recipeButton { "Receta", Icons::recipe(), "Como esta hecho este sonido, paso a paso" };
 
     GardenView garden;
     EditView edit;
     ModView mod;
     SampleEditor sampleEditor;
     DrawPanel drawPanel;
+    RecipePanel recipePanel;
+    CleanerPanel cleanerPanel;
     juce::MidiKeyboardComponent keyboard;
 
     int currentTab = 0;

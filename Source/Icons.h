@@ -229,6 +229,51 @@ namespace Icons
         Path p; p.startNewSubPath (0.15f, 0.85f); p.lineTo (0.2f, 0.65f); p.lineTo (0.7f, 0.15f); p.lineTo (0.85f, 0.3f); p.lineTo (0.35f, 0.8f); p.closeSubPath();
         p.startNewSubPath (0.6f, 0.25f); p.lineTo (0.75f, 0.4f); return p;
     }
+    inline Path power()
+    {
+        Path p; p.addCentredArc (0.5f, 0.55f, 0.32f, 0.32f, 0.0f, 0.65f, juce::MathConstants<float>::twoPi - 0.65f, true);
+        p.startNewSubPath (0.5f, 0.12f); p.lineTo (0.5f, 0.5f); return p;
+    }
+    inline Path broom()   // Limpiar
+    {
+        Path p; p.startNewSubPath (0.82f, 0.1f); p.lineTo (0.5f, 0.5f);
+        p.startNewSubPath (0.38f, 0.42f); p.lineTo (0.62f, 0.62f); p.lineTo (0.42f, 0.9f); p.lineTo (0.1f, 0.62f); p.closeSubPath();
+        p.startNewSubPath (0.22f, 0.72f); p.lineTo (0.32f, 0.8f); return p;
+    }
+    inline Path recipe()  // libro / receta
+    {
+        Path p; p.startNewSubPath (0.5f, 0.22f); p.lineTo (0.5f, 0.86f);
+        p.startNewSubPath (0.5f, 0.22f); p.quadraticTo (0.3f, 0.12f, 0.1f, 0.18f); p.lineTo (0.1f, 0.8f); p.quadraticTo (0.3f, 0.75f, 0.5f, 0.86f);
+        p.quadraticTo (0.7f, 0.75f, 0.9f, 0.8f); p.lineTo (0.9f, 0.18f); p.quadraticTo (0.7f, 0.12f, 0.5f, 0.22f);
+        p.startNewSubPath (0.2f, 0.38f); p.lineTo (0.4f, 0.4f); p.startNewSubPath (0.2f, 0.52f); p.lineTo (0.4f, 0.54f);
+        p.startNewSubPath (0.6f, 0.4f); p.lineTo (0.8f, 0.38f); p.startNewSubPath (0.6f, 0.54f); p.lineTo (0.8f, 0.52f); return p;
+    }
+    inline Path history()
+    {
+        Path p; p.addCentredArc (0.52f, 0.52f, 0.36f, 0.36f, 0.0f, -2.2f, 3.4f, true);
+        p.startNewSubPath (0.14f, 0.18f); p.lineTo (0.17f, 0.36f); p.lineTo (0.34f, 0.32f);
+        p.startNewSubPath (0.52f, 0.3f); p.lineTo (0.52f, 0.54f); p.lineTo (0.68f, 0.64f); return p;
+    }
+    inline Path grains()
+    {
+        Path p; const float pts[][3] { { 0.2f, 0.3f, 0.07f }, { 0.45f, 0.2f, 0.05f }, { 0.7f, 0.32f, 0.08f }, { 0.3f, 0.62f, 0.06f },
+                                       { 0.58f, 0.58f, 0.09f }, { 0.82f, 0.7f, 0.05f }, { 0.42f, 0.84f, 0.05f } };
+        for (auto& q : pts) p.addEllipse (q[0] - q[2], q[1] - q[2], q[2] * 2.0f, q[2] * 2.0f);
+        return p;
+    }
+    inline Path rescue()  // "rescatar este": check
+    {
+        Path p; p.startNewSubPath (0.15f, 0.52f); p.lineTo (0.4f, 0.76f); p.lineTo (0.86f, 0.24f); return p;
+    }
+    inline Path note()
+    {
+        Path p; p.addEllipse (0.18f, 0.62f, 0.3f, 0.24f); p.startNewSubPath (0.48f, 0.74f); p.lineTo (0.48f, 0.14f); p.lineTo (0.82f, 0.26f); p.lineTo (0.82f, 0.4f); p.lineTo (0.48f, 0.3f); return p;
+    }
+    inline Path drum()
+    {
+        Path p; p.addEllipse (0.15f, 0.3f, 0.7f, 0.2f); p.startNewSubPath (0.15f, 0.4f); p.lineTo (0.15f, 0.72f); p.quadraticTo (0.5f, 0.92f, 0.85f, 0.72f); p.lineTo (0.85f, 0.4f);
+        p.startNewSubPath (0.3f, 0.1f); p.lineTo (0.5f, 0.36f); p.startNewSubPath (0.78f, 0.08f); p.lineTo (0.6f, 0.36f); return p;
+    }
     inline Path play()   { Path p; p.addTriangle (0.3f, 0.2f, 0.3f, 0.8f, 0.8f, 0.5f); return p; }
     inline Path stop()   { Path p; p.addRectangle (0.28f, 0.28f, 0.44f, 0.44f); return p; }
     inline Path save()

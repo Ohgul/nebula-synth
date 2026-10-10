@@ -9,6 +9,9 @@ struct SampleData
     double sampleRate = 44100.0;
     float rootNote = 60.0f;          // nota MIDI (con decimales = cents)
     bool hasPitch = false;
+    bool melodic = false;            // es una frase (varias notas): rootNote es la tónica de su tonalidad
+    int keyTonic = -1;               // 0 = C ... 11 = B
+    bool keyMinor = false;
     juce::String name;
     juce::File file;
     juce::MemoryBlock embedded;      // copia comprimida (FLAC) para guardarla dentro del proyecto
