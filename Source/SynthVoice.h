@@ -37,6 +37,24 @@ struct VoiceContext
     std::atomic<bool> abOriginal { false };            // A/B: tocar el sample original
     std::atomic<float> abGain { 1.0f };
     std::atomic<float> masterBend { 0.0f };            // MPE: pitch bend del canal maestro
+
+    // Azar reproducible: cada nota arranca con una semilla derivada de la semilla de la instancia,
+    // del número de nota-on (desde el último prepare/reset) y de la nota. Así la misma configuración
+    // y la misma secuencia MIDI dan exactamente el mismo audio, y cada golpe sigue siendo distinto.
+    // "Legacy" (proyectos de antes de esta versión) conserva el azar libre de siempre.
+    std::atomic<bool> seededRandom { true };
+    std::atomic<juce::uint32> renderSeed { 0x4E424C41u };
+    std::atomic<juce::uint64> noteOnCount { 0 };
+
+    static juce::int64 noteSeed (juce::uint32 seed, juce::uint64 count, int note)
+    {
+        // splitmix64
+        juce::uint64 z = ((juce::uint64) seed << 32) ^ (count * 0x9E3779B97F4A7C15ull) ^ (juce::uint64) (note & 0x7f);
+        z += 0x9E3779B97F4A7C15ull;
+        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+        z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+        return (juce::int64) (z ^ (z >> 31));
+    }
 };
 
 class SynthVoice : public juce::SynthesiserVoice
@@ -55,6 +73,30 @@ public:
         rsPlayer.prepare (sampleRate);
     }
 
+    // Deja la voz como recién creada (lo usa reset() en modo de azar reproducible)
+    void resetState()
+    {
+        clearCurrentNote();
+        ampEnv.reset(); env2.reset(); env3.reset();
+        for (auto& f : filters) f = NebFilter();     // también su mezcla "abierto" (reset() la deja en el último valor)
+        rsPlayer = ResynthPlayer();                  // prepare() se llama justo después
+        for (auto& o : osc1) o = NebOsc();
+        for (auto& o : osc2) o = NebOsc();
+        sub = NebOsc();
+        lfo1 = NebLfo(); lfo2 = NebLfo();
+        tick = 0; legatoPending = false;
+        velocity = 1.0f; wheel = 0.0f; polyPressure = 0.0f; targetNote = currentNote = 60.0f;
+        env2Val = env3Val = 0.0f;
+        volTarget = 1.0f; volSm = 1.0f;
+        playhead = 0.0; grainTimer = 0;
+        for (auto& g : grains) g.active = false;
+        for (auto& g : cloud) g.active = false;
+        cloudTimer = 0; newestGrain = -1; noiseState = 0.0f;
+        timbre = 0.0f; noteDrift = 0.0f; driftA = driftB = 0.0f;
+        chaosVal = chaosTarget = chaosTimer = 0.0f;
+        abPos = 0.0;
+    }
+
     bool canPlaySound (juce::SynthesiserSound* s) override { return dynamic_cast<SynthSound*> (s) != nullptr; }
 
     void startNote (int midiNote, float vel, juce::SynthesiserSound*, int pitchWheel) override
@@ -62,6 +104,17 @@ public:
         const int mode = params.i (P::polyMode);
         const bool legato = legatoPending && ampEnv.isActive() && mode != PolyMode::Poly;
         legatoPending = false;
+
+        if (ctx.seededRandom.load())
+        {
+            random.setSeed (VoiceContext::noteSeed (ctx.renderSeed.load(), ctx.noteOnCount.fetch_add (1), midiNote));
+            if (! legato)
+            {
+                // la deriva analógica arranca en un punto de su recorrido normal (antes venía de la historia de la voz)
+                driftA = (random.nextFloat() * 2.0f - 1.0f) * 0.055f;
+                driftB = (random.nextFloat() * 2.0f - 1.0f) * 0.055f;
+            }
+        }
 
         velocity = vel;
         targetNote = (float) midiNote;

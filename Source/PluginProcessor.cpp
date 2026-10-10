@@ -14,6 +14,9 @@ NebulaAudioProcessor::NebulaAudioProcessor()
     for (int i = 0; i < numVoices; ++i)
         synth.addVoice (new SynthVoice (voiceCtx));
 
+    // Cada instancia nueva tiene su propia semilla (dos Nebula iguales no suenan clonadas); se guarda en el proyecto
+    voiceCtx.renderSeed = (juce::uint32) juce::Random::getSystemRandom().nextInt();
+
     state.state.setProperty ("preset", 0, nullptr);
     imitator.onFinished = [this] { triggerAsyncUpdate(); };
 }
@@ -465,6 +468,31 @@ void NebulaAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
     masterGain.reset (sampleRate, 0.03);
     masterGain.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (state.getRawParameterValue (ParamID::master)->load(), -60.0f));
     keyboardState.reset();
+    restartRandomSequence();
+}
+
+void NebulaAudioProcessor::reset()
+{
+    restartRandomSequence();
+}
+
+void NebulaAudioProcessor::restartRandomSequence()
+{
+    if (! voiceCtx.seededRandom.load()) return;
+    voiceCtx.noteOnCount = 0;
+    voiceCtx.lastNote = -1.0f;
+    freeRunTime = 0.0;
+    for (int i = 0; i < synth.getNumVoices(); ++i)
+        if (auto* v = dynamic_cast<SynthVoice*> (synth.getVoice (i))) v->resetState();
+    fx.reset();
+    if (os2 != nullptr) os2->reset();
+    if (os4 != nullptr) os4->reset();
+    currentFactor = 1;
+    synth.setCurrentPlaybackSampleRate (currentSampleRate);
+    for (int i = 0; i < synth.getNumVoices(); ++i)
+        if (auto* v = dynamic_cast<SynthVoice*> (synth.getVoice (i))) v->prepare (currentSampleRate);
+    dcX[0] = dcX[1] = dcY[0] = dcY[1] = 0.0f;
+    masterGain.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (state.getRawParameterValue (ParamID::master)->load(), -60.0f));
 }
 
 bool NebulaAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -680,6 +708,8 @@ void NebulaAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
         if (auto t = tables.get (WavetableBank::userIndex))
             copy.setProperty ("userTable", t->toBase64(), nullptr);
     copy.setProperty ("version", 3, nullptr);
+    copy.setProperty ("randomMode", voiceCtx.seededRandom.load() ? "seeded" : "legacy", nullptr);
+    copy.setProperty ("renderSeed", (juce::int64) voiceCtx.renderSeed.load(), nullptr);
     if (resynthModel64.isNotEmpty()) copy.setProperty ("resynthModel", resynthModel64, nullptr);
     if (auto xml = copy.createXml())
         copyXmlToBinary (*xml, destData);
@@ -694,6 +724,12 @@ void NebulaAudioProcessor::setStateInformation (const void* data, int sizeInByte
     const auto embedded = tree["sampleEmbedded"].toString();
     const auto userTable = tree["userTable"].toString();
     const auto model64 = tree["resynthModel"].toString();
+    // Azar: los proyectos guardados antes de esta versión no tienen "randomMode" y conservan el azar libre
+    const bool seeded = tree["randomMode"].toString() == "seeded";
+    const auto seed = tree.hasProperty ("renderSeed") ? (juce::uint32) (juce::int64) tree["renderSeed"] : voiceCtx.renderSeed.load();
+    tree.removeProperty ("randomMode", nullptr);
+    tree.removeProperty ("renderSeed", nullptr);
+    setRandomMode (seeded, seed);
     tree.removeProperty ("resynthModel", nullptr);
     tree.removeProperty ("sampleEmbedded", nullptr);
     tree.removeProperty ("userTable", nullptr);

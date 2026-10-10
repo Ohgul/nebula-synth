@@ -65,7 +65,7 @@ target_link_libraries(NebulaSynth
 # ---- Prueba opcional (renderiza audio a WAV sin abrir un DAW) ----
 option(NEBULA_BUILD_TESTS "Compilar las pruebas sin DAW" OFF)
 if(NEBULA_BUILD_TESTS)
-    foreach(t Render Imitate V2 V21 V3 Ui)
+    foreach(t Render Imitate V2 V21 V3 Ui Bench Stereo Determinism)
         juce_add_console_app(Nebula${t}Test PRODUCT_NAME "Nebula${t}Test")
         target_sources(Nebula${t}Test PRIVATE ${NEBULA_SOURCES} tests/${t}Test.cpp)
         target_compile_definitions(Nebula${t}Test PRIVATE

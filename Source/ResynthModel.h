@@ -59,9 +59,12 @@ struct ResynthModel
     float frameAt (double t) const
     {
         const int n = frames();
-        if (n < 2 || t <= times.front()) return 0.0f;
-        if (t >= times.back()) return (float) (n - 1);
-        const auto it = std::upper_bound (times.begin(), times.end(), (float) t);
+        // Se compara en float, igual que la búsqueda: con double, un tiempo justo antes del último
+        // frame podía redondear a ese frame y upper_bound devolvía end() (lectura fuera del vector).
+        const float tf = (float) t;
+        if (n < 2 || ! (tf > times.front())) return 0.0f;   // también si t no es un número
+        if (tf >= times.back()) return (float) (n - 1);
+        const auto it = std::upper_bound (times.begin(), times.end(), tf);
         const int i1 = (int) (it - times.begin()), i0 = i1 - 1;
         const float span = juce::jmax (1.0e-6f, times[(size_t) i1] - times[(size_t) i0]);
         return (float) i0 + ((float) t - times[(size_t) i0]) / span;
@@ -314,7 +317,9 @@ public:
         // Ancho: el ruido de la derecha llega unos ms después (Haas)
         const int hl = (int) haas.size();
         haas[(size_t) haasPos] = nz;
-        const int delay = juce::jmax (1, (int) (width * (hl - 2)));
+        // El ancho que llega puede pasar de 1 (ancho del modelo × 2 × "Resintesis Ancho"); el retardo
+        // Haas se satura en su máximo (20 ms) para no leer fuera del búfer. Con ancho <= 1 no cambia nada.
+        const int delay = juce::jlimit (1, hl - 2, (int) (juce::jmin (1.0f, width) * (float) (hl - 2)));
         const float nzR = haas[(size_t) ((haasPos - delay + hl) % hl)];
         haasPos = (haasPos + 1) % hl;
 

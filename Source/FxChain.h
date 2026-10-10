@@ -23,11 +23,18 @@ public:
         smoothDelay = -1.0;
     }
 
+    // Vuelve al estado recién preparado (sin reservar memoria)
     void reset()
     {
+        for (auto* f : { &tiltLow, &tiltHigh, &eqLow, &eqMid, &eqHigh }) f->reset();
         for (auto& b : chorusBuf) std::fill (b.begin(), b.end(), 0.0f);
         for (auto& b : delayBuf) std::fill (b.begin(), b.end(), 0.0f);
+        chorusPos = delayPos = 0;
+        chorusPhase = 0.0;
         reverb.clear();
+        compEnv = 0.0f;
+        delayLp[0] = delayLp[1] = 0.0f;
+        smoothDelay = -1.0;
     }
 
     void process (juce::AudioBuffer<float>& buffer, const ParamPointers& p, double bpm)
@@ -191,6 +198,7 @@ private:
             for (auto& l : lines) std::fill (l.begin(), l.end(), 0.0f);
             std::fill (pre.begin(), pre.end(), 0.0f);
             for (auto& d : damp) d = 0.0f;
+            modPhase = 0.0;
         }
         void set (float size, float decay, float bright, float preDelay, double s)
         {

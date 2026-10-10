@@ -22,6 +22,13 @@ public:
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
+    void reset() override;
+
+    // Azar reproducible (ver VoiceContext). Sin interfaz: lo guarda el proyecto.
+    // (cambia el modo y la semilla; el reinicio completo del estado lo hacen prepareToPlay() y reset())
+    void setRandomMode (bool seeded, juce::uint32 seed) { voiceCtx.seededRandom = seeded; voiceCtx.renderSeed = seed; voiceCtx.noteOnCount = 0; }
+    bool isSeededRandom() const { return voiceCtx.seededRandom.load(); }
+    juce::uint32 renderSeed() const { return voiceCtx.renderSeed.load(); }
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
@@ -154,6 +161,9 @@ private:
     juce::SmoothedValue<float> masterGain;
 
     double currentSampleRate = 44100.0, freeRunTime = 0.0;
+    // En modo reproducible, reset() deja el procesador como recién preparado: así una misma secuencia
+    // MIDI desde un reset da exactamente el mismo audio. En legacy no hace nada (como antes).
+    void restartRandomSequence();
     juce::String sampleEmbedded64;
 
     std::atomic<bool> previewing { false };
