@@ -232,8 +232,11 @@ namespace ResynthBuilder
                 const int lo = juce::jmax (1, (int) (edges[(size_t) b] / binHz)), hi = juce::jmin (N / 2, (int) (edges[(size_t) b + 1] / binHz));
                 double e = 0.0; int used = 0, all = 0;
                 for (int k = lo; k <= hi; ++k) { ++all; if (! excluded[(size_t) k]) { e += (double) mag[(size_t) k] * mag[(size_t) k]; ++used; } }
-                // potencia (Parseval) corrigiendo por los bins que se quitaron
-                const double p = used > 0 ? (2.0 * e / ((double) N * sumW2)) * ((double) all / used) : 0.0;
+                // En sonidos con tono (p. ej. 808), extrapolar los bins excluidos
+                // inflaba el ruido de fondo donde predominan los parciales.
+                // Conservamos la correccion para material predominantemente aperiódico.
+                const double compensation = (! prof.pitched && used > 0) ? (double) all / used : 1.0;
+                const double p = used > 0 ? (2.0 * e / ((double) N * sumW2)) * compensation : 0.0;
                 m->noise[(size_t) f][(size_t) b] = (float) std::sqrt (p);
                 totalNoise += p;
             }
