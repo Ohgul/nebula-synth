@@ -32,6 +32,8 @@ def overwrites(guild, name):
         role = discord.utils.get(guild.roles, name=role_name)
         if role:
             result[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+    if guild.me is not None:
+        result[guild.me] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, manage_channels=True, manage_messages=True, manage_threads=True, create_private_threads=True, send_messages_in_threads=True)
     return result
 
 class CloseTicket(discord.ui.View):
@@ -157,7 +159,11 @@ async def provision(guild, publish=True):
             category = await guild.create_category(category_name, overwrites=privacy or {})
             created += 1
         elif privacy is not None:
-            await category.edit(overwrites=privacy)
+            try:
+                await category.edit(overwrites=privacy)
+            except discord.Forbidden:
+                logging.warning("Cannot edit restricted category %s. Check bot role visibility and channel permissions.", category_name)
+                continue
         for channel_name in channels:
             channel = discord.utils.get(category.text_channels, name=channel_name)
             if channel is None:
