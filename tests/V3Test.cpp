@@ -1,9 +1,12 @@
 // Pruebas de Nebula 3: resíntesis nueva (parecido con muchos tipos de sonido), afinado a C, A/B,
 // efectos, macros, encendidos, oversampling, MPE y CPU.
 #include <juce_audio_utils/juce_audio_utils.h>
+#include "TestEntry.h"
 #include "../Source/PluginProcessor.h"
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter();
+
+namespace {   // todo lo de esta prueba es local (permite juntar todas en NebulaTests)
 
 static constexpr double sr = 48000.0;
 static constexpr int block = 512;
@@ -93,7 +96,9 @@ static juce::AudioBuffer<float> make (double seconds, Gen g, bool stereo = false
     return b;
 }
 
-int main (int argc, char** argv)
+} // namespace
+
+int NEBULA_TEST_ENTRY (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI gui;
     outDir = juce::File (argc > 1 ? juce::String (argv[1]) : juce::File::getCurrentWorkingDirectory().getFullPathName());

@@ -1,11 +1,16 @@
 // Prueba sin DAW: toca cada preset, guarda un WAV y una captura de la interfaz.
 #include <juce_audio_utils/juce_audio_utils.h>
+#include "TestEntry.h"
 #include "../Source/PluginProcessor.h"
 #include "../Source/Presets.h"
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter();
 
-int main (int argc, char** argv)
+namespace {   // todo lo de esta prueba es local (permite juntar todas en NebulaTests)
+
+} // namespace
+
+int NEBULA_TEST_ENTRY (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI gui;
     const juce::File outDir (argc > 1 ? juce::String (argv[1]) : juce::File::getCurrentWorkingDirectory().getFullPathName());

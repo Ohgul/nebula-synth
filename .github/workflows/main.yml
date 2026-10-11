@@ -29,11 +29,29 @@ jobs:
       - name: Compilar VST3, AU y app (Apple Silicon + Intel)
         run: cmake --build build --config Release --target NebulaSynth_VST3 NebulaSynth_AU NebulaSynth_Standalone
 
-      - name: Compilar prueba de interfaz
-        run: cmake --build build --config Release --target NebulaUiTest
+      - name: Compilar pruebas (un solo ejecutable)
+        run: cmake --build build --config Release --target NebulaTests
 
-      - name: Ejecutar prueba de interfaz
-        run: ./build/NebulaUiTest_artefacts/Release/NebulaUiTest
+      - name: Pruebas de motor y estabilidad
+        run: |
+          T=./build/NebulaTests_artefacts/Release/NebulaTests
+          mkdir -p test-output
+          $T Ui test-output/ui
+          $T Stereo
+          $T Determinism tests/fixtures/v3
+          $T V3 test-output/v3
+
+      - name: Compatibilidad con proyectos v3 (informativa en Mac)
+        continue-on-error: true
+        run: ./build/NebulaTests_artefacts/Release/NebulaTests Bench test-output/bench --only 0,8 --fixtures tests/fixtures/v3
+
+      - name: Subir resultados de pruebas
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nebula-Pruebas
+          path: test-output
+          retention-days: 14
 
       - name: Firmar localmente (ad-hoc)
         run: |

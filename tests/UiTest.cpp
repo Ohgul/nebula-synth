@@ -1,14 +1,19 @@
 // Capturas de la interfaz v2 (todas las pestañas, ventanas y la animación del Jardín).
 #include <juce_audio_utils/juce_audio_utils.h>
+#include "TestEntry.h"
 #include "../Source/PluginProcessor.h"
 #include "../Source/PluginEditor.h"
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter();
 
+namespace {   // todo lo de esta prueba es local (permite juntar todas en NebulaTests)
+
 static constexpr double sr = 48000.0;
 static constexpr int block = 512;
 
-int main (int argc, char** argv)
+} // namespace
+
+int NEBULA_TEST_ENTRY (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI gui;
     const juce::File outDir (argc > 1 ? juce::String (argv[1]) : juce::File::getCurrentWorkingDirectory().getFullPathName());

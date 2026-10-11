@@ -62,19 +62,33 @@ target_link_libraries(NebulaSynth
         juce::juce_recommended_warning_flags
 )
 
-# ---- Prueba opcional (renderiza audio a WAV sin abrir un DAW) ----
+# ---- Pruebas sin DAW ----
+# Todas las pruebas van en un solo ejecutable (NebulaTests) para compilar el plugin y JUCE una vez:
+#   NebulaTests <Nombre> [argumentos]      p. ej.  NebulaTests Stereo   /   NebulaTests Bench salida
 option(NEBULA_BUILD_TESTS "Compilar las pruebas sin DAW" OFF)
 if(NEBULA_BUILD_TESTS)
-    foreach(t Render Imitate V2 V21 V3 Ui Bench Stereo Determinism)
+    set(NEBULA_TEST_NAMES "")
+    set(NEBULA_TEST_FILES "")
+    foreach(t Render Imitate V2 V21 V3 Ui Bench Stereo Determinism Midi Dna Transform)
         if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/${t}Test.cpp")
-            message(STATUS "Skipping missing test: ${t}Test.cpp")
+            message(STATUS "Prueba no encontrada (se omite): ${t}Test.cpp")
             continue()
         endif()
-        juce_add_console_app(Nebula${t}Test PRODUCT_NAME "Nebula${t}Test")
-        target_sources(Nebula${t}Test PRIVATE ${NEBULA_SOURCES} tests/${t}Test.cpp)
-        target_compile_definitions(Nebula${t}Test PRIVATE
-            JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_DISPLAY_SPLASH_SCREEN=0 JUCE_MODAL_LOOPS_PERMITTED=1)
-        target_link_libraries(Nebula${t}Test PRIVATE
-            juce::juce_audio_utils juce::juce_dsp juce::juce_recommended_config_flags)
+        list(APPEND NEBULA_TEST_NAMES ${t})
+        list(APPEND NEBULA_TEST_FILES tests/${t}Test.cpp)
+        set_source_files_properties(tests/${t}Test.cpp PROPERTIES COMPILE_DEFINITIONS "NEBULA_TEST_ENTRY=nebulaTest_${t}")
     endforeach()
+    set(NEBULA_TEST_LIST "")
+    foreach(t ${NEBULA_TEST_NAMES})
+        string(APPEND NEBULA_TEST_LIST "NEBULA_TEST(${t})\n")
+    endforeach()
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/nebula_test_list.h" "${NEBULA_TEST_LIST}")
+
+    juce_add_console_app(NebulaTests PRODUCT_NAME "NebulaTests")
+    target_sources(NebulaTests PRIVATE ${NEBULA_SOURCES} ${NEBULA_TEST_FILES} tests/TestMain.cpp)
+    target_include_directories(NebulaTests PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+    target_compile_definitions(NebulaTests PRIVATE
+        JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_DISPLAY_SPLASH_SCREEN=0 JUCE_MODAL_LOOPS_PERMITTED=1)
+    target_link_libraries(NebulaTests PRIVATE
+        juce::juce_audio_utils juce::juce_dsp juce::juce_recommended_config_flags)
 endif()
