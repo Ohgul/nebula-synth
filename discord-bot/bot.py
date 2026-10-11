@@ -155,8 +155,9 @@ async def main():
     async with bot:
         bot.add_view(TicketPanel())
         bot.add_view(CloseTicket())
+        await bot.login(TOKEN)
         await bot.tree.sync(guild=GUILD)
-        await bot.start(TOKEN)
+        await bot.connect()
 
 if __name__ == "__main__":
     import asyncio
