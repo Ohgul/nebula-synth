@@ -30,7 +30,13 @@ jobs:
         run: cmake --build build --config Release --target NebulaSynth_VST3 NebulaSynth_AU NebulaSynth_Standalone
 
       - name: Compilar pruebas (un solo ejecutable)
-        run: cmake --build build --config Release --target NebulaTests
+        run: |
+          set -o pipefail
+          cmake --build build --config Release --target NebulaTests 2>&1 | tee build-tests.log || {
+            # los errores se publican como anotaciones (se ven en la página del CI y por la API)
+            grep -E "error:" build-tests.log | head -20 | while IFS= read -r l; do echo "::error::$l"; done
+            exit 1
+          }
 
       - name: Pruebas de motor y estabilidad
         run: |
@@ -40,6 +46,7 @@ jobs:
           $T Stereo
           $T Determinism tests/fixtures/v3
           $T V3 test-output/v3
+          $T Midi
 
       - name: Compatibilidad con proyectos v3 (informativa en Mac)
         continue-on-error: true

@@ -97,13 +97,14 @@ void NebulaAudioProcessor::autoRegion()
     for (int i = 0; i < n; ++i) peak = juce::jmax (peak, std::abs (x[i]));
     if (peak <= 0.0f) return;
 
-    // Salta el silencio del principio y del final; en audios largos se queda con 4 s
+    // Salta el silencio del principio y del final. Antes se quedaba con 4 s: los pads largos perdían todo lo
+    // que pasaba después (la resíntesis adaptativa ya analiza el sonido completo). Límite: 60 s.
     int a = 0;
     while (a < n - 1 && std::abs (x[a]) < peak * 0.02f) ++a;
     int b = n - 1;
     while (b > a && std::abs (x[b]) < peak * 0.005f) --b;
     a = juce::jmax (0, a - (int) (s->sampleRate * 0.005));
-    b = juce::jmin (n - 1, juce::jmin (b + (int) (s->sampleRate * 0.02), a + (int) (s->sampleRate * 4.0)));
+    b = juce::jmin (n - 1, juce::jmin (b + (int) (s->sampleRate * 0.02), a + (int) (s->sampleRate * 60.0)));
     setRegion ((float) a / (float) n, (float) b / (float) n);
 }
 
@@ -177,6 +178,10 @@ NebulaAudioProcessor::RecreateResult NebulaAudioProcessor::recreateFromSample()
             rp->setValueNotifyingHost (rp->getDefaultValue());
         }
     set (ParamID::engine, (float) Engine::Resynth);
+    // Un sonido recreado se toca polifónico y sin glide: si antes había un preset Mono/Legato cargado,
+    // el modo se heredaba y solo sonaba una nota a la vez.
+    set (ParamID::polyMode, (float) PolyMode::Poly);
+    set (ParamID::glide, 0.0f);
     set (ParamID::filterType, (float) FilterKind::LowPass);
     set (ParamID::filterChar, 0.0f);
     set (ParamID::cutoff, 20000.0f);
@@ -532,6 +537,8 @@ void NebulaAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     if (useFactor != currentFactor)
     {
         currentFactor = useFactor;
+        // El oversampling retrasa la salida unas muestras: se avisa a Ableton para que lo compense
+        setLatencySamples (useFactor == 1 ? 0 : juce::roundToInt ((useFactor == 2 ? os2 : os4)->getLatencyInSamples()));
         synth.setCurrentPlaybackSampleRate (currentSampleRate * useFactor);
         for (int i = 0; i < synth.getNumVoices(); ++i)
             if (auto* v = dynamic_cast<SynthVoice*> (synth.getVoice (i))) v->prepare (currentSampleRate * useFactor);

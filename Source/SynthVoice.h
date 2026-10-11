@@ -68,6 +68,7 @@ public:
     void prepare (double sampleRate)
     {
         sr = sampleRate;
+        declickCoef = (float) std::exp (-1.0 / (0.003 * sampleRate));
         for (auto* e : { &ampEnv, &env2, &env3 }) e->setSampleRate (sampleRate);
         for (auto& f : filters) f.reset();
         rsPlayer.prepare (sampleRate);
@@ -95,6 +96,8 @@ public:
         timbre = 0.0f; noteDrift = 0.0f; driftA = driftB = 0.0f;
         chaosVal = chaosTarget = chaosTimer = 0.0f;
         abPos = 0.0;
+        realTail = false; tailGain = 0.0f;
+        lastL = lastR = declickL = declickR = 0.0f;
     }
 
     bool canPlaySound (juce::SynthesiserSound* s) override { return dynamic_cast<SynthSound*> (s) != nullptr; }
@@ -105,6 +108,7 @@ public:
         const bool legato = legatoPending && ampEnv.isActive() && mode != PolyMode::Poly;
         legatoPending = false;
 
+        realTail = false;
         if (ctx.seededRandom.load())
         {
             random.setSeed (VoiceContext::noteSeed (ctx.renderSeed.load(), ctx.noteOnCount.fetch_add (1), midiNote));
@@ -171,9 +175,19 @@ public:
     {
         if (allowTailOff)
         {
+            // Resíntesis con cola real: suena la cola del sample (la envolvente de suelta no la recorta)
+            if (resynth && rsPlayer.hasRealTail() && ! ctx.abOriginal.load())
+            {
+                rsPlayer.release();
+                realTail = true;
+                tailGain = ampEnv.current();
+                env2.noteOff(); env3.noteOff();
+                return;
+            }
             ampEnv.noteOff(); env2.noteOff(); env3.noteOff();
             return;
         }
+        realTail = false;
         // En mono/legato "robar" la voz es en realidad un cambio de nota: no cortamos
         if (params.i (P::polyMode) != PolyMode::Poly && ampEnv.isActive() && isKeyDown())
         {
@@ -181,6 +195,9 @@ public:
             clearCurrentNote();
             return;
         }
+        // Corte inmediato (robo de voz): la señal saltaba de golpe a cero y hacía clic. Se guarda el último valor
+        // y se deja caer en ~3 ms sumado a la nota nueva, así la onda no da un salto.
+        if (ampEnv.isActive()) { declickL = lastL; declickR = lastR; }
         ampEnv.reset(); env2.reset(); env3.reset();
         clearCurrentNote();
     }
@@ -268,15 +285,24 @@ public:
             }
 
             volSm += (volTarget - volSm) * 0.01f;
-            const float amp = ampEnv.next() * velGain * 0.3f * volSm;
+            if (realTail && ! rsPlayer.hasRealTail()) { realTail = false; ampEnv.noteOff(); }   // el modelo cambió
+            const float amp = (realTail ? tailGain : ampEnv.next()) * velGain * 0.3f * volSm;
             L *= amp * gainL;
             R *= amp * gainR;
+            if (declickL != 0.0f || declickR != 0.0f)
+            {
+                L += declickL; R += declickR;
+                declickL *= declickCoef; declickR *= declickCoef;
+                if (std::abs (declickL) + std::abs (declickR) < 1.0e-6f) declickL = declickR = 0.0f;
+            }
+            lastL = L; lastR = R;
 
             if (outR != nullptr) { outL[start + i] += L; outR[start + i] += R; }
             else                 { outL[start + i] += 0.5f * (L + R); }
 
-            if (! ampEnv.isActive())
+            if (realTail ? rsPlayer.finished() : ! ampEnv.isActive())
             {
+                if (realTail) { realTail = false; ampEnv.reset(); env2.reset(); env3.reset(); }
                 clearCurrentNote();
                 for (auto& f : filters) f.reset();
                 legatoPending = false;
@@ -755,6 +781,9 @@ private:
     float timbre = 0.0f, noteDrift = 0.0f, driftA = 0.0f, driftB = 0.0f;
     float chaosVal = 0.0f, chaosTarget = 0.0f, chaosTimer = 0.0f;
     double abPos = 0.0;
+    bool realTail = false;     // sonando la cola real del modelo (tras soltar la tecla)
+    float lastL = 0.0f, lastR = 0.0f, declickL = 0.0f, declickR = 0.0f, declickCoef = 0.993f;
+    float tailGain = 0.0f;
 };
 
 // ---------------------------------------------------------------------------
