@@ -54,8 +54,12 @@ namespace ResynthBuilder
             g = 1.0f / juce::jmax (1.0e-6f, regionPeak);
             m->harmonicLevel = peakNorm * g;   // la tabla queda con rms 1/peakNorm
 
-            // Volumen de la parte armónica cada 5 ms: rms del sonido × fracción armónica del cuadro
-            const int hop = (int) (sr * m->envHop), win = hop * 2;
+            // Volumen de la parte armónica cada 5 ms: rms del sonido × fracción armónica del cuadro.
+            // La ventana dura un número entero de periodos (>= 10 ms): con menos de un ciclo (bajos de 40 Hz),
+            // el rms oscilaba con la forma de onda y modulaba el sonido (bandas laterales audibles).
+            const double periodS = 1.0 / rootHz;
+            const int hop = (int) (sr * m->envHop);
+            const int win = (int) std::round (sr * periodS * std::ceil (0.010 / periodS));
             for (double t = 0.0; t <= rd.times.back() + 0.001; t += m->envHop)
             {
                 const int c = onset + (int) (t * sr);
@@ -83,7 +87,7 @@ namespace ResynthBuilder
         // ---- Curva densa de tono (vibratos, glides, melodías) ----
         if (prof.pitched)
         {
-            const auto contour = SoundProfiler::pitchContour (x + onset, n - onset, sr, regionPeak * 0.02f);
+            const auto contour = SoundProfiler::pitchContourAuto (x + onset, n - onset, sr, regionPeak * 0.02f);
             m->pitchHop = (float) contour.hop;
             float last = 0.0f;
             for (auto nt : contour.note)
@@ -251,6 +255,48 @@ namespace ResynthBuilder
         }
         // Ruido despreciable: fuera (ahorra CPU)
         if (useHarm && prof.noiseRatio < 0.01f) m->noise.clear();
+
+        // ---- Cabeza original para bajos (808, sub) ----
+        // El golpe de un 808 (click + caída de tono de ~12 semitonos en pocos ms) es más rápido de lo que el
+        // análisis por ciclos puede seguir con notas de 30-60 Hz. Se guardan los primeros 40 ms del original y
+        // la resíntesis entra con un cruce de 10 ms en el que la fase de la tabla se alinea con la del original
+        // (así el cruce no cancela). Funciona igual para 808 limpios y saturados.
+        if (useHarm && rootHz < 110.0 && m->harmonic != nullptr)
+        {
+            const int pre = (int) (0.002 * sr), head = (int) (0.040 * sr), xf = (int) (0.010 * sr);
+            const int s0 = juce::jmax (0, onset - pre);
+            const int len = juce::jmin (n - s0, (onset - s0) + head + xf);
+            const int xfStart = (onset - s0) + head;
+            if (len > xfStart + xf / 2)
+            {
+                m->transient.assign ((size_t) len, 0.0f);
+                for (int i = 0; i < len; ++i)
+                {
+                    const float fi = i < (onset - s0) && (onset - s0) > 0 ? 0.5f - 0.5f * std::cos (juce::MathConstants<float>::pi * (float) i / (float) (onset - s0)) : 1.0f;
+                    const float fo = i >= xfStart ? juce::jmax (0.0f, 1.0f - (float) (i - xfStart) / (float) xf) : 1.0f;
+                    m->transient[(size_t) i] = x[s0 + i] * fi * fo * g;
+                }
+                m->transientRate = (float) sr;
+                m->headStart = (float) xfStart;
+                m->headXf = (float) xf;
+                // fase de la fundamental del original en el inicio del cruce (cos(2π·fase) en la tabla)
+                const double tS = (double) (s0 + xfStart - onset) / sr;
+                const double cents = ResynthModel::curveAt (m->pitchCurve, m->pitchHop, tS);
+                const double f = rootHz * std::exp2 (cents / 1200.0);
+                const int half = (int) (sr / f);
+                double c = 0.0, sn = 0.0;
+                for (int k = -half; k <= half; ++k)
+                {
+                    const int i = s0 + xfStart + k;
+                    if (i < 0 || i >= n) continue;
+                    const double w = 0.5 + 0.5 * std::cos (juce::MathConstants<double>::pi * k / (half + 1));
+                    const double ang = juce::MathConstants<double>::twoPi * f * k / sr;
+                    c += w * x[i] * std::cos (ang); sn += w * x[i] * std::sin (ang);
+                }
+                double ph = std::atan2 (-sn, c) / juce::MathConstants<double>::twoPi;
+                m->headPhase = (float) (ph - std::floor (ph));
+            }
+        }
         return m;
     }
 }

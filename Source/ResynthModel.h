@@ -32,6 +32,13 @@ struct ResynthModel
     // Curvas densas (para frases y ataques): volumen de la parte armónica y tono, en cents
     float envHop = 0.005f, pitchHop = 0.01f;
     std::vector<float> harmEnv, pitchCurve;
+    // Capa de transitorio (formato 4): el click/golpe del ataque como audio corto, a la frecuencia del sample.
+    // Se toca al empezar la nota, transpuesto con la tecla. Vacía = sin capa (como en los modelos v3).
+    std::vector<float> transient;
+    float transientRate = 48000.0f;
+    // Si headStart > 0, el transitorio es la "cabeza" del original: hasta headStart (muestras del transitorio)
+    // la resíntesis calla; ahí su fase salta a headPhase (ciclos) y entra en headXf muestras mientras la cabeza sale.
+    float headStart = 0.0f, headXf = 0.0f, headPhase = 0.0f;
 
     static float curveAt (const std::vector<float>& c, float hop, double t)
     {
@@ -74,7 +81,8 @@ struct ResynthModel
     juce::String toBase64() const
     {
         juce::MemoryOutputStream mo;
-        mo.writeInt (3);   // versión del formato
+        const bool v4 = ! transient.empty();
+        mo.writeInt (v4 ? 4 : 3);   // versión del formato (sin transitorio se guarda igual que en v3)
         mo.writeString (name);
         mo.writeFloat (rootNote);
         mo.writeBool (sustained);
@@ -95,6 +103,11 @@ struct ResynthModel
         mo.writeString (harmonic != nullptr ? harmonic->toBase64() : juce::String());
         mo.writeFloat (envHop); mo.writeInt ((int) harmEnv.size()); for (auto v : harmEnv) mo.writeFloat (v);
         mo.writeFloat (pitchHop); mo.writeInt ((int) pitchCurve.size()); for (auto v : pitchCurve) mo.writeFloat (v);
+        if (v4)
+        {
+            mo.writeFloat (transientRate); mo.writeInt ((int) transient.size()); for (auto v : transient) mo.writeFloat (v);
+            mo.writeFloat (headStart); mo.writeFloat (headXf); mo.writeFloat (headPhase);
+        }
         return mo.getMemoryBlock().toBase64Encoding();
     }
 
@@ -103,7 +116,8 @@ struct ResynthModel
         juce::MemoryBlock mb;
         if (! mb.fromBase64Encoding (s)) return nullptr;
         juce::MemoryInputStream in (mb, false);
-        if (in.readInt() != 3) return nullptr;
+        const int version = in.readInt();
+        if (version != 3 && version != 4) return nullptr;
         auto m = std::make_shared<ResynthModel>();
         m->name = in.readString();
         m->rootNote = in.readFloat();
@@ -139,6 +153,14 @@ struct ResynthModel
         const int npc = in.readInt();
         if (npc < 0 || npc > 200000) return nullptr;
         m->pitchCurve.resize ((size_t) npc); for (auto& v : m->pitchCurve) v = in.readFloat();
+        if (version >= 4)
+        {
+            m->transientRate = in.readFloat();
+            const int nt = in.readInt();
+            if (nt < 0 || nt > 48000 * 2 || ! (m->transientRate > 1000.0f)) return nullptr;
+            m->transient.resize ((size_t) nt); for (auto& v : m->transient) v = in.readFloat();
+            m->headStart = in.readFloat(); m->headXf = in.readFloat(); m->headPhase = in.readFloat();
+        }
         return m;
     }
 };
@@ -188,6 +210,7 @@ public:
     {
         model = std::move (m);
         t = 0.0;
+        trPos = 0.0;
         phase = 0.0;
         for (auto& p : ph) p = { 1.0, 0.0 };
         for (size_t k = 0; k < ph.size(); ++k)
@@ -224,6 +247,8 @@ public:
             else if (! m.pitchCents.empty()) cents = lerp (m.pitchCents[(size_t) f0], m.pitchCents[(size_t) f1]);
         }
         hz = noteHz * std::exp2 (cents / 1200.0);
+        // el transitorio se transpone con la tecla (sin la curva de tono: es el golpe, no la nota)
+        trStep = m.transient.empty() ? 0.0 : (noteHz / (440.0 * std::exp2 ((m.rootNote - 69.0) / 12.0))) * m.transientRate / sr;
         const float env = m.harmEnv.empty() ? 1.0f : ResynthModel::curveAt (m.harmEnv, m.envHop, tt);
         harmTarget = harm * m.harmonicLevel * env;
         harmStep = (harmTarget - harmGain) / (float) juce::jmax (1, samples);
@@ -270,6 +295,22 @@ public:
         if (! hasModel()) return;
         const auto& m = *model;
         float centre = 0.0f;
+
+        // Transitorio / cabeza original del ataque
+        float modelGain = 1.0f, trOut = 0.0f;   // la resíntesis entra cuando termina la cabeza
+        if (trStep > 0.0 && trPos < (double) m.transient.size() - 1.0)
+        {
+            const int i0 = (int) trPos; const float fr = (float) (trPos - i0);
+            trOut = m.transient[(size_t) i0] + (m.transient[(size_t) i0 + 1] - m.transient[(size_t) i0]) * fr;
+            if (m.headStart > 0.0f)
+            {
+                const double next = trPos + trStep;
+                if (trPos < m.headStart && next >= m.headStart) phase = m.headPhase;   // alinea la fase con el original
+                modelGain = trPos < m.headStart ? 0.0f : juce::jmin (1.0f, (float) ((trPos - m.headStart) / juce::jmax (1.0f, m.headXf)));
+            }
+            trPos += trStep;
+        }
+        else if (trStep > 0.0 && m.headStart > 0.0f && trPos < m.headStart) modelGain = 0.0f;
 
         // Parte armónica (tabla)
         if (m.harmonic != nullptr && (harmGain > 0.0f || harmTarget > 0.0f))
@@ -323,7 +364,7 @@ public:
         const float nzR = haas[(size_t) ((haasPos - delay + hl) % hl)];
         haasPos = (haasPos + 1) % hl;
 
-        float l = centre + pl + nz, r = centre + pr + (width > 0.01f ? nzR : nz);
+        float l = (centre + pl + nz) * modelGain + trOut, r = (centre + pr + (width > 0.01f ? nzR : nz)) * modelGain + trOut;
 
         // Tono: inclina el brillo (+ más agudos, - más oscuro)
         tiltState += 0.12f * (0.5f * (l + r) - tiltState);
@@ -340,7 +381,7 @@ private:
     struct Band { double g = 0.1, k = 1.0, s1 = 0.0, s2 = 0.0; float norm = 1.0f; };
 
     std::shared_ptr<const ResynthModel> model;
-    double sr = 44100.0, t = 0.0, phase = 0.0, hz = 220.0;
+    double sr = 44100.0, t = 0.0, phase = 0.0, hz = 220.0, trPos = 0.0, trStep = 0.0;
     float frame = 0.0f, position = 0.0f, harmGain = 0.0f, harmTarget = 0.0f, harmStep = 0.0f, tiltState = 0.0f;
     int rampLen = 16, numPartials = 0, haasPos = 0;
     std::array<std::pair<double, double>, ResynthModel::maxPartials> ph {}, rot {};

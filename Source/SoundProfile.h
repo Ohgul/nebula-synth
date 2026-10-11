@@ -97,12 +97,14 @@ namespace SoundProfiler
     // ---- Contorno de tono (cada 10 ms) ----
     struct Contour { std::vector<float> note, weight; double hop = 0.01; };
 
-    inline Contour pitchContour (const float* x, int n, double sr, float minRms)
+    // low = bajos (808): ventana más larga y búsqueda hasta 24 Hz (C1 = 32.7 Hz, A0 = 27.5 Hz)
+    inline Contour pitchContour (const float* x, int n, double sr, float minRms, bool low = false)
     {
         Contour c;
         // Como mucho ~400 cuadros (los samples largos se miran más espaciado)
         c.hop = juce::jmax (0.01, n / sr / 400.0);
-        const int hop = (int) (sr * c.hop), win = (int) (sr * 0.06);
+        const int hop = (int) (sr * c.hop), win = (int) (sr * (low ? 0.13 : 0.06));
+        const float minHz = low ? 24.0f : 35.0f;
         for (int i = 0; i + win < n; i += hop)
         {
             double s = 0.0;
@@ -111,13 +113,31 @@ namespace SoundProfiler
             float note = -1.0f;
             if (r > minRms)
             {
-                const float hz = SampleTools::detectPitch (x + i, win, sr);
-                if (hz > 30.0f && hz < 2500.0f) note = 69.0f + 12.0f * std::log2 (hz / 440.0f);
+                const float hz = SampleTools::detectPitch (x + i, win, sr, minHz);
+                if (hz > (low ? 24.0f : 30.0f) && hz < 2500.0f) note = 69.0f + 12.0f * std::log2 (hz / 440.0f);
             }
             c.note.push_back (note);
             c.weight.push_back (r);
         }
         return c;
+    }
+
+    // Si el sonido es sobre todo subgrave (808, sub), el contorno normal no ve notas por debajo de ~35 Hz
+    // ni sigue bien un tono de 40 Hz con 60 ms de ventana: se repite en modo "bajo".
+    inline Contour pitchContourAuto (const float* x, int n, double sr, float minRms)
+    {
+        auto c = pitchContour (x, n, sr, minRms, false);
+        // fracción de energía por debajo de 100 Hz (paso bajo de 2 polos)
+        double lowE = 0.0, allE = 0.0, s1 = 0.0, s2 = 0.0;
+        const double a = std::exp (-juce::MathConstants<double>::twoPi * 100.0 / sr);
+        for (int i = 0; i < n; ++i) { s1 = (1.0 - a) * x[i] + a * s1; s2 = (1.0 - a) * s1 + a * s2; lowE += s2 * s2; allE += (double) x[i] * x[i]; }
+        if (allE <= 0.0 || lowE / allE < 0.5) return c;
+        auto lowC = pitchContour (x, n, sr, minRms, true);
+        int voicedA = 0, voicedB = 0;
+        for (auto v : c.note) if (v > 0.0f) ++voicedA;
+        for (auto v : lowC.note) if (v > 0.0f) ++voicedB;
+        // En sonidos graves se prefiere el modo bajo (ve notas por debajo de 35 Hz) salvo que encuentre bastante menos tono
+        return voicedB * 5 >= voicedA * 4 ? lowC : c;
     }
 
     inline float weightedMedian (std::vector<std::pair<float, float>> v)   // (valor, peso)
@@ -229,7 +249,7 @@ namespace SoundProfiler
         p.scanS = (float) juce::jlimit (0.05, maxScan, scanEndS);
 
         // ---- Tono ----
-        const auto contour = pitchContour (x + (int) (p.onsetS * sr), n - (int) (p.onsetS * sr), sr, env.peak * 0.06f);
+        const auto contour = pitchContourAuto (x + (int) (p.onsetS * sr), n - (int) (p.onsetS * sr), sr, env.peak * 0.06f);
         std::vector<std::pair<float, float>> notes;
         double activeW = 0.0, pitchedW = 0.0;
         for (size_t i = 0; i < contour.note.size(); ++i)
@@ -345,6 +365,15 @@ namespace SoundProfiler
             sumW += win[(size_t) i]; sumW2 += win[(size_t) i] * win[(size_t) i];
         }
 
+        std::vector<float> smoothNote (contour.note.size(), -1.0f);
+        for (size_t i = 0; i < contour.note.size(); ++i)
+        {
+            std::vector<float> w;
+            for (int k = -2; k <= 2; ++k) { const long j = (long) i + k; if (j >= 0 && j < (long) contour.note.size() && contour.note[(size_t) j] > 0.0f) w.push_back (contour.note[(size_t) j]); }
+            if (contour.note[i] > 0.0f && w.size() >= 3) { std::nth_element (w.begin(), w.begin() + (long) w.size() / 2, w.end()); smoothNote[i] = w[w.size() / 2]; }
+            else smoothNote[i] = contour.note[i];
+        }
+
         constexpr float scanCurve = 0.3f;                    // curva de la Env 3 que recorre la tabla
         const float scanP = std::exp2 (-scanCurve * 2.0f);  // cuadros más densos al principio (el ataque)
         const double f0Global = p.pitched ? 440.0 * std::exp2 ((p.note - 69.0) / 12.0) : 110.0;
@@ -360,16 +389,22 @@ namespace SoundProfiler
         for (int f = 0; f < frames; ++f)
         {
             const double u = (double) f / (frames - 1);
-            const double t = p.onsetS + p.scanS * std::pow (u, 1.0 / scanP);
+            // la ventana de análisis (4 periodos) no debe salirse del sample: un ciclo truncado es basura
+            const double maxT = juce::jmax ((double) p.onsetS, n / sr - 0.5 * periods / f0Global - 0.002);
+            const double t = juce::jmin (maxT, p.onsetS + p.scanS * std::pow (u, 1.0 / scanP));
             frameTimes[(size_t) f] = (float) (t - p.onsetS);
 
-            // f0 local (sigue el vibrato y pequeñas derivas)
+            // f0 local: sigue vibratos, derivas y también caídas de tono y glides (808) de hasta 2 octavas.
+            // Se usa el contorno filtrado con mediana de 5, que quita saltos de octava aislados del detector.
             double f0 = f0Global;
             if (p.pitched && ! p.melodic)
             {
-                const int ci = juce::jlimit (0, juce::jmax (0, (int) contour.note.size() - 1), (int) ((t - p.onsetS) / contour.hop));
-                if (! contour.note.empty() && contour.note[(size_t) ci] > 0.0f && std::abs (contour.note[(size_t) ci] - p.note) < 1.0f)
-                    f0 = 440.0 * std::exp2 ((contour.note[(size_t) ci] - 69.0) / 12.0);
+                const int ci = juce::jlimit (0, juce::jmax (0, (int) smoothNote.size() - 1), (int) ((t - p.onsetS) / contour.hop));
+                // en graves (808, sub) se siguen caídas/glides grandes; en el resto, como antes, solo ±1 semitono
+                // (en campanas el detector salta entre parciales y eso no es un cambio de tono)
+                const float maxDev = p.note < 48.0f ? 24.0f : 1.0f;
+                if (! smoothNote.empty() && smoothNote[(size_t) ci] > 0.0f && std::abs (smoothNote[(size_t) ci] - p.note) < maxDev)
+                    f0 = 440.0 * std::exp2 ((smoothNote[(size_t) ci] - 69.0) / 12.0);
             }
             if (p.melodic)
             {
@@ -465,12 +500,23 @@ namespace SoundProfiler
             // Ciclo resintetizado: suma de armónicos con su fase relativa a la fundamental
             if (resynth != nullptr)
             {
+                // en el ataque (primeros 80 ms) un click cae dentro de la ventana de 4 periodos: ahí se filtra
+                // lo que no es armónico. Después no (vibratos y voces ensanchan los picos y se perderían).
+                const bool inAttack = t - p.onsetS < 0.08;
                 constexpr int fs = 2048;
                 std::vector<float> spec ((size_t) fs * 2, 0.0f);
                 const double ph1 = phs[1];
                 for (int k = 1; k <= juce::jmin (maxK, fs / 2 - 1); ++k)
                 {
                     if (mags[(size_t) k] < maxMag * 1.0e-3) continue;   // -60 dB: fuera
+                    // Solo lo que de verdad es armónico: el pico debe sobresalir 6 dB del espacio entre armónicos.
+                    // Un golpe o click es ruido de banda ancha: si entrara al ciclo se repetiría como un zumbido
+                    // agudo periódico (era el "ruido" en el ataque de los 808). Ese contenido queda para la capa de ruido.
+                    {
+                        const int b = k * binsPerHarm;
+                        const double between = 0.5 * (pw (b - 2) + pw (b + 2));
+                        if (inAttack && k > 1 && pw (b) < 4.0 * between) continue;
+                    }
                     const double ph = phs[(size_t) k] - k * ph1;
                     // amplitud a / fase ph → coeficientes para la FFT inversa real de JUCE (escala fs/2)
                     spec[(size_t) (2 * k)]     = (float) (mags[(size_t) k] * std::cos (ph) * fs * 0.5);
