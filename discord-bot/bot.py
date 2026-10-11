@@ -98,7 +98,7 @@ async def configurar(interaction: discord.Interaction):
         category = discord.utils.get(guild.categories, name=name)
         privacy = overwrites(guild, name)
         if category is None:
-            category = await guild.create_category(name, overwrites=privacy)
+            category = await guild.create_category(name, overwrites=privacy or {})
             created += 1
         elif privacy is not None:
             await category.edit(overwrites=privacy)
