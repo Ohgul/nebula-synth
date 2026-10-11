@@ -171,6 +171,10 @@ async def provision(guild, publish=True):
                 for staff_name in ("Administrador Nebula", "Desarrollador"):
                     role = discord.utils.get(guild.roles, name=staff_name)
                     if role: await channel.set_permissions(role, send_messages=True)
+            # Bot explicitly retains posting rights in read-only and private channels.
+            await channel.set_permissions(guild.me, view_channel=True, send_messages=True,
+                                          read_message_history=True, embed_links=True,
+                                          attach_files=True, manage_messages=True)
             if publish and channel_name in MESSAGES:
                 if await ensure_post(channel, MESSAGES[channel_name].split("\n")[0], MESSAGES[channel_name]): posted += 1
     # credits live in a dedicated read-only public channel
@@ -180,6 +184,7 @@ async def provision(guild, publish=True):
         credits = await guild.create_text_channel("creditos", category=info, topic="Creditos, colaboradores y transparencia; no atribuir aportes sin confirmacion.")
         created += 1
     await credits.set_permissions(guild.default_role, send_messages=False)
+    await credits.set_permissions(guild.me, view_channel=True, send_messages=True, read_message_history=True, manage_messages=True)
     if publish and await ensure_post(credits, "**CREDITOS", CREDITS): posted += 1
     panel = discord.utils.get(guild.text_channels, name="abrir-ticket")
     if publish and panel:
