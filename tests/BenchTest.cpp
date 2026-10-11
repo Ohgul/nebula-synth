@@ -11,6 +11,8 @@
 //   Con --fixtures y una referencia existente, además comprueba compatibilidad.
 // Escribe bench_results.json, bench_summary.md y pares de escucha en <salida>/escucha.
 // ===========================================================================
+#include <cstdio>
+#include <functional>
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "TestEntry.h"
 #include "../Source/PluginProcessor.h"
@@ -408,6 +410,7 @@ static juce::var engineFidelity (PairWriter& pairs, std::vector<RecreatedCase>& 
             mo->setProperty ("bandasRuido", m->noise.empty() ? 0 : ResynthModel::numBands);
             mo->setProperty ("tablaArmonica", m->harmonic != nullptr);
             mo->setProperty ("sostenido", m->sustained);
+            mo->setProperty ("cuerpoDesdeS", num (m->loopStart, 3)); mo->setProperty ("colaDesdeS", num (m->releaseStart, 3));
             mo->setProperty ("ultimoFrameS", num (m->times.empty() ? 0.0 : m->times.back(), 3));
             mo->setProperty ("duracionS", num (s.audio.getNumSamples() / sr, 3));
             mo->setProperty ("raizDetectada", num (m->rootNote, 2));
@@ -451,8 +454,12 @@ static juce::var engineFidelity (PairWriter& pairs, std::vector<RecreatedCase>& 
         o->setProperty ("teclaUsada", key);
 
         const double len = s.audio.getNumSamples() / sr;
-        auto rec = render (*p, { { 0.0, key, true }, { len, key, false } }, len + 1.5);
-        auto rec2 = render (*p, { { 0.0, key, true }, { len, key, false } }, len + 1.5);
+        // Si el modelo tiene cuerpo sostenido y cola real, se suelta la tecla donde el original empieza su cola
+        // (así la recreación sigue la misma línea de tiempo); si no, al final del sample, como antes.
+        const double offAt = m->hasLoop() ? juce::jmin (len, 0.0 + m->releaseStart + (double) p->lastProfile.onsetS) : len;
+        o->setProperty ("sueltaEnS", num (offAt, 3));
+        auto rec = render (*p, { { 0.0, key, true }, { offAt, key, false } }, len + 1.5);
+        auto rec2 = render (*p, { { 0.0, key, true }, { offAt, key, false } }, len + 1.5);
         long bad = 0; for (int ch = 0; ch < 2; ++ch) for (int i = 0; i < rec.getNumSamples(); ++i) if (! std::isfinite (rec.getSample (ch, i))) ++bad;
         o->setProperty ("muestrasNoFinitas", (juce::int64) bad);
         if (bad > 0)
@@ -475,7 +482,7 @@ static juce::var engineFidelity (PairWriter& pairs, std::vector<RecreatedCase>& 
 
         // A/B actual (el original tocado por la voz, igualado por pico)
         p->setAB (true);
-        auto ab = render (*p, { { 0.0, key, true }, { len, key, false } }, len + 1.5);
+        auto ab = render (*p, { { 0.0, key, true }, { offAt, key, false } }, len + 1.5);
         p->setAB (false);
         const double lRec = integratedLufs (rec, sr), lAb = integratedLufs (ab, sr);
         o->setProperty ("abSaltoLU", num (lAb - lRec, 2));

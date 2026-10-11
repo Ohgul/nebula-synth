@@ -55,6 +55,9 @@ struct ResynthData
     float noiseAmount = 0.0f;                 // cantidad de la matriz Env 2 -> Ruido
     float noiseColor = 1.0f;
     float nA = 0.005f, nD = 0.2f, nS = 0.0f, nR = 0.2f;   // envolvente del ruido (Env 2)
+    // Segmentos del sonido (segundos desde el ataque; -1 = no hay): el cuerpo sostenido que se recorre
+    // mientras se mantiene la nota y el comienzo de la cola real (la caída final que ya no vuelve a subir)
+    float sustainStartS = -1.0f, releaseStartS = -1.0f;
 };
 
 namespace SoundProfiler
@@ -225,7 +228,8 @@ namespace SoundProfiler
         std::vector<float> lv (env.lin.size());
         for (size_t i = 0; i < lv.size(); ++i) lv[i] = env.lin[i] / env.peak;
         int onsetIdx = 0;
-        while (onsetIdx < env.peakIdx && lv[(size_t) onsetIdx] < 0.03f) ++onsetIdx;
+        // comienzo: -50 dB del pico (con -30 dB, en pads de ataque lento se perdía el principio del crescendo)
+        while (onsetIdx < env.peakIdx && lv[(size_t) onsetIdx] < 0.003f) ++onsetIdx;
         int endIdx = (int) lv.size() - 1;
         while (endIdx > env.peakIdx && lv[(size_t) endIdx] < 0.003f) --endIdx;
         p.onsetS = (float) (onsetIdx * env.hop);
@@ -235,14 +239,40 @@ namespace SoundProfiler
         int pk = 0;
         fitAdsr (lvFromOnset, env.hop, p.attackS, p.decayS, p.sustainLevel, p.sustained, pk);
 
-        // Suelta: en sonidos sostenidos, la cola final del sample
+        // Suelta: en sonidos sostenidos, la cola final del sample.
+        // La cola es la caída final que ya no vuelve a subir: se recorre desde el final hacia atrás mientras el
+        // nivel (dB, suavizado 50 ms) no esté más de 1.5 dB por debajo de lo que viene después. Así un filtro
+        // que se cierra y se vuelve a abrir no se confunde con la cola (antes bastaba con bajar del 70 %).
         double scanEndS = p.durationS;
+        int relIdx = -1, bodyStartIdx = 0;
         if (p.sustained)
         {
-            int rel = (int) lvFromOnset.size() - 1;
-            while (rel > pk && lvFromOnset[(size_t) rel] < 0.7f * p.sustainLevel) --rel;
-            const double tail = ((int) lvFromOnset.size() - 1 - rel) * env.hop;
-            p.releaseS = (float) juce::jlimit (0.03, 4.0, tail * 0.6);
+            const int m = (int) lvFromOnset.size();
+            const int sm = juce::jmax (1, (int) std::round (0.025 / env.hop));
+            std::vector<float> ldb ((size_t) m);
+            for (int i = 0; i < m; ++i)
+            {
+                double acc = 0; int cnt = 0;
+                for (int k = i - sm; k <= i + sm; ++k) if (k >= 0 && k < m) { acc += lvFromOnset[(size_t) k]; ++cnt; }
+                ldb[(size_t) i] = 20.0f * std::log10 ((float) (acc / juce::jmax (1, cnt)) + 1.0e-6f);
+            }
+            int suf = m - 1; float maxAfter = ldb[(size_t) suf];
+            while (suf > pk && ldb[(size_t) suf - 1] >= maxAfter - 1.5f) { --suf; maxAfter = juce::jmax (maxAfter, ldb[(size_t) suf]); }
+            // dentro de ese tramo final que ya no sube, la cola empieza donde el nivel cae 3 dB bajo su máximo
+            int rel = m - 1;
+            for (int i = m - 1; i >= suf; --i) if (ldb[(size_t) i] >= maxAfter - 3.0f) { rel = i; break; }
+            // tiene que ser una caída de verdad (>= 15 dB hasta el final)
+            const bool realRelease = ldb[(size_t) rel] - ldb[(size_t) (m - 1)] >= 15.0f;
+            if (! realRelease) rel = m - 1;
+            bodyStartIdx = 0;
+            {
+                const float pkDb = *std::max_element (ldb.begin(), ldb.end());
+                while (bodyStartIdx < rel && ldb[(size_t) bodyStartIdx] < pkDb - 10.0f) ++bodyStartIdx;
+                bodyStartIdx += (int) (0.1 / env.hop);
+            }
+            relIdx = rel;
+            const double tail = (m - 1 - rel) * env.hop;
+            p.releaseS = (float) juce::jlimit (0.03, 4.0, juce::jmax (0.05, tail * 0.6));
             scanEndS = rel * env.hop;
         }
         else p.releaseS = 0.25f;
@@ -377,7 +407,28 @@ namespace SoundProfiler
         constexpr float scanCurve = 0.3f;                    // curva de la Env 3 que recorre la tabla
         const float scanP = std::exp2 (-scanCurve * 2.0f);  // cuadros más densos al principio (el ataque)
         const double f0Global = p.pitched ? 440.0 * std::exp2 ((p.note - 69.0) / 12.0) : 110.0;
-        const int frames = juce::jlimit (2, 64, numFrames);
+        // Cuadros: numFrames > 0 = cantidad fija repartida con la curva de siempre (análisis rápido);
+        // numFrames <= 0 = adaptativo (resíntesis): candidatos densos en TODO el sonido (incluida la cola) y
+        // al final se eligen los que hacen falta para que interpolar entre ellos no se aleje más de 1 dB.
+        const bool adaptive = numFrames <= 0 && resynth != nullptr;
+        std::vector<double> cand;
+        if (adaptive)
+        {
+            const double endS = juce::jmin ((double) p.durationS, maxScan);
+            const double step = juce::jlimit (0.01, 0.05, endS / 500.0);
+            for (double tt = 0.0; tt < juce::jmin (0.1, endS); tt += 0.005) cand.push_back (tt);
+            for (double tt = juce::jmin (0.1, endS); tt <= endS + 1.0e-9; tt += step) cand.push_back (tt);
+            if (cand.size() < 2) cand = { 0.0, juce::jmax (0.01, endS) };
+            if (p.sustained && relIdx >= 0)
+            {
+                const double relS = relIdx * env.hop;
+                resynth->releaseStartS = (float) relS;
+                const double susS = juce::jlimit (0.0, relS, bodyStartIdx * env.hop);
+                if (relS - susS >= 0.25) resynth->sustainStartS = (float) susS;
+                else resynth->releaseStartS = -1.0f;
+            }
+        }
+        const int frames = adaptive ? (int) cand.size() : juce::jlimit (2, 64, numFrames);
 
         std::array<double, 16> harmAcc {};
         double evenE = 0, oddE = 0, wTot = 0, brightAcc = 0, brightW = 0, noiseAcc = 0, harmAccE = 0;
@@ -391,7 +442,7 @@ namespace SoundProfiler
             const double u = (double) f / (frames - 1);
             // la ventana de análisis (4 periodos) no debe salirse del sample: un ciclo truncado es basura
             const double maxT = juce::jmax ((double) p.onsetS, n / sr - 0.5 * periods / f0Global - 0.002);
-            const double t = juce::jmin (maxT, p.onsetS + p.scanS * std::pow (u, 1.0 / scanP));
+            const double t = juce::jmin (maxT, adaptive ? p.onsetS + cand[(size_t) f] : p.onsetS + p.scanS * std::pow (u, 1.0 / scanP));
             frameTimes[(size_t) f] = (float) (t - p.onsetS);
 
             // f0 local: sigue vibratos, derivas y también caídas de tono y glides (808) de hasta 2 octavas.
@@ -502,7 +553,9 @@ namespace SoundProfiler
             {
                 // en el ataque (primeros 80 ms) un click cae dentro de la ventana de 4 periodos: ahí se filtra
                 // lo que no es armónico. Después no (vibratos y voces ensanchan los picos y se perderían).
-                const bool inAttack = t - p.onsetS < 0.08;
+                // Solo en graves: en el resto el golpe (martillo, púa) se pierde si se quita de aquí; en los graves
+                // el ataque lo reproduce la cabeza original y así el ciclo no arrastra el click.
+                const bool inAttack = t - p.onsetS < 0.08 && f0Global < 110.0;
                 constexpr int fs = 2048;
                 std::vector<float> spec ((size_t) fs * 2, 0.0f);
                 const double ph1 = phs[1];
@@ -599,6 +652,82 @@ namespace SoundProfiler
                 resynth->nA = juce::jmax (0.001f, resynth->nA);
                 resynth->nR = p.releaseS;
             }
+        }
+
+        // En la cola, cuando el sonido ya está 40 dB por debajo de su máximo, el ciclo medido es poco fiable
+        // (ruido de fondo, armónicos que se pierden): se conserva el último ciclo bueno, que es lo que se oye.
+        if (adaptive && resynth != nullptr && resynth->cycles.size() == harmRmsF.size())
+        {
+            const float hMax = *std::max_element (harmRmsF.begin(), harmRmsF.end());
+            const int at = (int) (std::max_element (harmRmsF.begin(), harmRmsF.end()) - harmRmsF.begin());
+            int lastGood = at;
+            for (int f = at; f < (int) harmRmsF.size(); ++f)
+            {
+                if (harmRmsF[(size_t) f] >= hMax * 0.01f) lastGood = f;
+                else resynth->cycles[(size_t) f] = resynth->cycles[(size_t) lastGood];
+            }
+        }
+
+        // ---- Selección adaptativa de cuadros ----
+        if (adaptive && resynth != nullptr && resynth->cycles.size() > 2)
+        {
+            const int nc = (int) resynth->cycles.size();
+            constexpr int H = 48;
+            std::vector<std::array<float, H + 2>> feat ((size_t) nc);
+            float levelMax = 1.0e-9f;
+            for (int f = 0; f < nc; ++f) levelMax = juce::jmax (levelMax, std::sqrt (harmRmsF[(size_t) f] * harmRmsF[(size_t) f] + noiseRms[(size_t) f] * noiseRms[(size_t) f]));
+            juce::dsp::FFT fft2 (11);
+            std::vector<float> b (4096);
+            for (int f = 0; f < nc; ++f)
+            {
+                std::fill (b.begin(), b.end(), 0.0f);
+                std::copy (resynth->cycles[(size_t) f].begin(), resynth->cycles[(size_t) f].end(), b.begin());
+                fft2.performFrequencyOnlyForwardTransform (b.data(), true);
+                float mx = 1.0e-12f; for (int k = 1; k <= H; ++k) mx = juce::jmax (mx, b[(size_t) k]);
+                for (int k = 1; k <= H; ++k) feat[(size_t) f][(size_t) k - 1] = juce::jmax (-60.0f, 20.0f * std::log10 (b[(size_t) k] / mx + 1.0e-9f));
+                const float nh = noiseRms[(size_t) f] / juce::jmax (1.0e-9f, harmRmsF[(size_t) f]);
+                feat[(size_t) f][H] = juce::jlimit (-60.0f, 20.0f, 20.0f * std::log10 (nh + 1.0e-9f));
+                // nivel del cuadro: los parciales y el ruido se interpolan entre cuadros, así que su envolvente
+                // también tiene que quedar bien muestreada (golpes, decaimientos)
+                const float lvl = std::sqrt (harmRmsF[(size_t) f] * harmRmsF[(size_t) f] + noiseRms[(size_t) f] * noiseRms[(size_t) f]);
+                feat[(size_t) f][H + 1] = juce::jmax (-60.0f, 20.0f * std::log10 (lvl / levelMax + 1.0e-9f));
+            }
+            constexpr float tol = 0.4f;   // dB: medio por armónico, o de nivel
+            auto err = [&] (int i, int j, int& at)
+            {
+                float worst = 0.0f; at = -1;
+                for (int k = i + 1; k < j; ++k)
+                {
+                    const float w = (float) (frameTimes[(size_t) k] - frameTimes[(size_t) i]) / juce::jmax (1.0e-6f, frameTimes[(size_t) j] - frameTimes[(size_t) i]);
+                    double e = 0.0;
+                    for (int d = 0; d <= H; ++d) e += std::abs (feat[(size_t) k][(size_t) d] - (feat[(size_t) i][(size_t) d] * (1.0f - w) + feat[(size_t) j][(size_t) d] * w));
+                    const float lv = std::abs (feat[(size_t) k][H + 1] - (feat[(size_t) i][H + 1] * (1.0f - w) + feat[(size_t) j][H + 1] * w));
+                    const float ee = juce::jmax ((float) (e / (H + 1)), lv);   // timbre medio o nivel, lo que más se aleje
+                    // y nunca más de 250 ms entre cuadros
+                    if (frameTimes[(size_t) j] - frameTimes[(size_t) i] > 0.25f && ee < tol * 1.01f && k == (i + j) / 2) { if (tol * 1.01f > worst) { worst = tol * 1.01f; at = k; } }
+                    if (ee > worst) { worst = ee; at = k; }
+                }
+                return worst;
+            };
+            std::vector<int> keep { 0, nc - 1 };
+            for (int k = 1; k < juce::jmin (nc - 1, 4); ++k) keep.push_back (k);   // el ataque siempre con detalle
+            constexpr int cap = 192;
+            for (;;)
+            {
+                std::sort (keep.begin(), keep.end());
+                keep.erase (std::unique (keep.begin(), keep.end()), keep.end());
+                if ((int) keep.size() >= cap) break;
+                float worst = 0.0f; int split = -1;
+                for (size_t q = 0; q + 1 < keep.size(); ++q)
+                {
+                    int at = -1; const float e = err (keep[q], keep[q + 1], at);
+                    if (e > worst) { worst = e; split = at; }
+                }
+                if (split < 0 || worst < tol) break;
+                keep.push_back (split);
+            }
+            auto pick = [&] (auto& v) { std::decay_t<decltype (v)> o; for (int k : keep) if (k < (int) v.size()) o.push_back (v[(size_t) k]); v = std::move (o); };
+            pick (resynth->cycles); pick (resynth->times); pick (resynth->pitchCents); pick (resynth->localHz); pick (resynth->noiseRms);
         }
 
         p.valid = true;

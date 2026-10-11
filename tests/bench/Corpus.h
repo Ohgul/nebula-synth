@@ -7,6 +7,7 @@
 // generarse en "variantes" (otra semilla de ruido, desafinado, decaimiento más
 // corto, evolución congelada, fases aleatorias) para validar las métricas.
 // ===========================================================================
+#include <limits>
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <cmath>
 #include <functional>

@@ -13,6 +13,7 @@
 // ventana del ataque, y fuga tonal (energía del residuo después del ataque
 // respecto al original, dB, menor = mejor: si es alta, la capa duplicaría el sonido).
 // ===========================================================================
+#include <complex>
 #include "Metrics.h"
 
 namespace Bench

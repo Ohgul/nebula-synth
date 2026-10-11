@@ -10,7 +10,7 @@ namespace ResynthBuilder
     inline std::shared_ptr<ResynthModel> build (const SampleData& smp, float rs, float re, float rootOffset, SoundProfile& prof)
     {
         ResynthData rd;
-        prof = SoundProfiler::analyse (smp, rs, re, rootOffset, &rd, 64, 30.0);
+        prof = SoundProfiler::analyse (smp, rs, re, rootOffset, &rd, 0, 120.0);   // cuadros adaptativos, hasta 2 min
         if (! prof.valid || rd.times.size() < 2) return nullptr;
 
         const double sr = smp.sampleRate;
@@ -29,6 +29,11 @@ namespace ResynthBuilder
         m->times = rd.times;
         m->pitchCents = rd.pitchCents;
         m->sustained = prof.sustained;
+        if (rd.sustainStartS >= 0.0f && rd.releaseStartS > rd.sustainStartS)
+        {
+            m->loopStart = rd.sustainStartS;
+            m->releaseStart = rd.releaseStartS;
+        }
         m->width = smp.width;
         const int frames = (int) rd.times.size();
         const double rootHz = 440.0 * std::exp2 ((m->rootNote - 69.0) / 12.0);
@@ -254,7 +259,8 @@ namespace ResynthBuilder
             for (auto& v : m->noise[(size_t) f]) v *= g;
         }
         // Ruido despreciable: fuera (ahorra CPU)
-        if (useHarm && prof.noiseRatio < 0.01f) m->noise.clear();
+        // (con cuadros adaptativos la media se diluye en colas largas: también se mira el ataque)
+        if (useHarm && prof.noiseRatio < 0.01f && prof.noiseAttackRatio < 0.02f) m->noise.clear();
 
         // ---- Cabeza original para bajos (808, sub) ----
         // El golpe de un 808 (click + caída de tono de ~12 semitonos en pocos ms) es más rápido de lo que el

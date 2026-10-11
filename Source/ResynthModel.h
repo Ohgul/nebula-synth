@@ -39,6 +39,10 @@ struct ResynthModel
     // Si headStart > 0, el transitorio es la "cabeza" del original: hasta headStart (muestras del transitorio)
     // la resíntesis calla; ahí su fase salta a headPhase (ciclos) y entra en headXf muestras mientras la cabeza sale.
     float headStart = 0.0f, headXf = 0.0f, headPhase = 0.0f;
+    // Sostenido (formato 4): mientras se mantiene la nota se recorre el cuerpo [loopStart, releaseStart] de ida y
+    // vuelta, con su evolución real; al soltar, la lectura va al comienzo de la cola real y la toca hasta el final.
+    float loopStart = -1.0f, releaseStart = -1.0f;
+    bool hasLoop() const { return loopStart >= 0.0f && releaseStart > loopStart + 0.2f && ! times.empty() && releaseStart <= times.back() + 0.05f; }
 
     static float curveAt (const std::vector<float>& c, float hop, double t)
     {
@@ -81,7 +85,7 @@ struct ResynthModel
     juce::String toBase64() const
     {
         juce::MemoryOutputStream mo;
-        const bool v4 = ! transient.empty();
+        const bool v4 = ! transient.empty() || hasLoop();
         mo.writeInt (v4 ? 4 : 3);   // versión del formato (sin transitorio se guarda igual que en v3)
         mo.writeString (name);
         mo.writeFloat (rootNote);
@@ -107,6 +111,7 @@ struct ResynthModel
         {
             mo.writeFloat (transientRate); mo.writeInt ((int) transient.size()); for (auto v : transient) mo.writeFloat (v);
             mo.writeFloat (headStart); mo.writeFloat (headXf); mo.writeFloat (headPhase);
+            mo.writeFloat (loopStart); mo.writeFloat (releaseStart);
         }
         return mo.getMemoryBlock().toBase64Encoding();
     }
@@ -160,6 +165,7 @@ struct ResynthModel
             if (nt < 0 || nt > 48000 * 2 || ! (m->transientRate > 1000.0f)) return nullptr;
             m->transient.resize ((size_t) nt); for (auto& v : m->transient) v = in.readFloat();
             m->headStart = in.readFloat(); m->headXf = in.readFloat(); m->headPhase = in.readFloat();
+            m->loopStart = in.readFloat(); m->releaseStart = in.readFloat();
         }
         return m;
     }
@@ -211,6 +217,7 @@ public:
         model = std::move (m);
         t = 0.0;
         trPos = 0.0;
+        dir = 1.0; released = false;
         phase = 0.0;
         for (auto& p : ph) p = { 1.0, 0.0 };
         for (size_t k = 0; k < ph.size(); ++k)
@@ -227,6 +234,11 @@ public:
     }
 
     bool hasModel() const { return model != nullptr && model->frames() >= 2; }
+    // Cola real (modelos con sostenido): la voz deja de usar su envolvente de suelta y espera a que termine
+    bool hasRealTail() const { return hasModel() && model->hasLoop(); }
+    void release() { released = true; }
+    // termina 30 ms después del último cuadro, con un fundido (antes se cortaba de golpe y hacía clic)
+    bool finished() const { return hasRealTail() && released && t >= (double) model->times.back() + tailFadeS; }
 
     // Se llama cada "controlRate" muestras: avanza el tiempo y calcula los objetivos
     void control (double noteHz, float speed, float harm, float partials, float noiseAmt, float stretch, bool followPitch, int samples)
@@ -234,7 +246,8 @@ public:
         if (! hasModel()) return;
         const auto& m = *model;
         double tt = t;
-        if (m.sustained) tt = juce::jmin (tt, (double) m.times.back());
+        if (m.hasLoop()) tt = juce::jlimit (0.0, (double) m.times.back(), t);
+        else if (m.sustained) tt = juce::jmin (tt, (double) m.times.back());
         frame = m.frameAt (tt);
         const int f0 = (int) frame, f1 = juce::jmin (m.frames() - 1, f0 + 1);
         const float w = frame - (float) f0;
@@ -281,7 +294,21 @@ public:
             }
             bandStep[(size_t) b] = (target - bandAmp[(size_t) b]) / (float) rampLen;
         }
-        t += speed * samples / sr;
+        const double adv = speed * samples / sr;
+        if (m.hasLoop())
+        {
+            if (! released)
+            {
+                // ida y vuelta por el cuerpo: la evolución sigue sin saltos ni congelarse
+                t += dir * adv;
+                if (t >= m.releaseStart) { t = 2.0 * m.releaseStart - t; dir = -1.0; }
+                if (dir < 0.0 && t <= m.loopStart) { t = 2.0 * m.loopStart - t; dir = 1.0; }
+            }
+            else if (t < m.releaseStart)
+                t += adv + (m.releaseStart - t) * juce::jmin (1.0, samples / (0.06 * sr));   // llega a la cola en ~60 ms
+            else t += adv;
+        }
+        else t += adv;
         // Renormaliza los fasores (evita que la amplitud se desvíe con el tiempo)
         for (int k = 0; k < np; ++k)
         {
@@ -364,6 +391,8 @@ public:
         const float nzR = haas[(size_t) ((haasPos - delay + hl) % hl)];
         haasPos = (haasPos + 1) % hl;
 
+        if (released && m.hasLoop() && t > (double) m.times.back())
+            modelGain *= (float) juce::jmax (0.0, 1.0 - (t - (double) m.times.back()) / tailFadeS);
         float l = (centre + pl + nz) * modelGain + trOut, r = (centre + pr + (width > 0.01f ? nzR : nz)) * modelGain + trOut;
 
         // Tono: inclina el brillo (+ más agudos, - más oscuro)
@@ -381,7 +410,9 @@ private:
     struct Band { double g = 0.1, k = 1.0, s1 = 0.0, s2 = 0.0; float norm = 1.0f; };
 
     std::shared_ptr<const ResynthModel> model;
-    double sr = 44100.0, t = 0.0, phase = 0.0, hz = 220.0, trPos = 0.0, trStep = 0.0;
+    double sr = 44100.0, t = 0.0, phase = 0.0, hz = 220.0, trPos = 0.0, trStep = 0.0, dir = 1.0;
+    bool released = false;
+    static constexpr double tailFadeS = 0.03;
     float frame = 0.0f, position = 0.0f, harmGain = 0.0f, harmTarget = 0.0f, harmStep = 0.0f, tiltState = 0.0f;
     int rampLen = 16, numPartials = 0, haasPos = 0;
     std::array<std::pair<double, double>, ResynthModel::maxPartials> ph {}, rot {};

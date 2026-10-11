@@ -12,7 +12,7 @@ class Wavetable
 public:
     static constexpr int frameSize = 2048;
     static constexpr int numMips = 10;       // mip m conserva 1024 >> m armónicos
-    static constexpr int maxFrames = 64;
+    static constexpr int maxFrames = 256;   // la resíntesis adaptativa puede usar más de 64 cuadros
 
     juce::String name;
 

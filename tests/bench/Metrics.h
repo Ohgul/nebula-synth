@@ -26,6 +26,8 @@
 //  - Clic: pico de la segunda derivada alrededor del evento contra su RMS en
 //    los alrededores (dB). Ruido de fondo de un pad sin eventos: ~10-14 dB.
 // ===========================================================================
+#include <limits>
+#include <array>
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_dsp/juce_dsp.h>
 #include <algorithm>
