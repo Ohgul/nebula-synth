@@ -175,7 +175,27 @@ namespace Forge
                 pitchTerm = (nd > 0 ? d / nd : 0.0) + (ns > 0 ? depth / ns : 0.0);
             }
             const double atk = std::abs (c.early - refF.early);
-            return colorDb / 3.0 + envDb / 3.0 + pitchTerm / 30.0 + atk / 6.0;
+            // La envolvente general ignora la referencia por debajo de -40 dB.
+            // En pads eso deja sin castigo colas audibles que se cortan pronto.
+            // La cola se compara después del note-off, sólo donde la referencia
+            // está dentro de 55 dB de su máximo. El peso es deliberadamente
+            // moderado para no perjudicar ataques/bajos ya recuperados.
+            double tailError = 0.0;
+            double tailWeight = 0.0;
+            const size_t tailStart = (size_t) juce::jlimit (0, (int) refF.loud.size(),
+                (int) std::floor (holdS / 0.01)); // loudnessCurve usa pasos de 10 ms
+            for (size_t i = tailStart; i < refF.loud.size() && i < c.loud.size(); ++i)
+            {
+                const double r = refF.loud[i];
+                if (r <= refF.loudMax - 55.0) continue;
+                const double x = juce::jmax (c.loud[i], refF.loudMax - 75.0);
+                const double d = juce::jlimit (-35.0, 35.0, r - x);
+                const double weight = juce::jlimit (0.0, 1.0, (r - (refF.loudMax - 55.0)) / 15.0);
+                tailError += weight * d * d;
+                tailWeight += weight;
+            }
+            const double tailDb = tailWeight > 0.0 ? std::sqrt (tailError / tailWeight) : 0.0;
+            return colorDb / 3.0 + envDb / 3.0 + pitchTerm / 30.0 + atk / 6.0 + tailDb / 6.0;
         }
 
         // Fidelidad completa (la que se muestra): comparación del banco a la frecuencia original
