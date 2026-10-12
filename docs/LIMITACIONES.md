@@ -11,7 +11,8 @@ Esta lista es explícita a propósito. Lo que aparece aquí **no** está resuelt
   - El desarrollo se hizo en Linux, sin Ableton.
   - Para la prueba manual, sigue `docs/PRUEBA-ABLETON.md`.
 - **No hay firma ni notarización de Apple.** El instalador está firmado *ad hoc* y macOS muestra una advertencia la primera vez. Hace falta una cuenta de Apple Developer.
-- **pluginval no corre en el CI.**
+- **pluginval** corre en el CI desde la rama `feature/nebula-0.4.0` (macOS: VST3 y AU; Windows: VST3, nivel 5), pero todavía como paso informativo. Hasta ver un resultado aprobado, no está verificado.
+- **Windows:** el trabajo de CI compila y prueba con MSVC desde la rama `feature/nebula-0.4.0`. Nadie lo probó en un DAW de Windows.
 
 ## Resíntesis
 
@@ -49,3 +50,14 @@ Esta lista es explícita a propósito. Lo que aparece aquí **no** está resuelt
 - **Las semillas del Cerebro (Jardín) no son reproducibles:** "Al azar" usa el azar del sistema. Las mutaciones del ADN sí son reproducibles.
 - **Interfaz:** no está acelerada por GPU. En el Cerebro el fondo se repinta seguido.
 - **El % del imitador interno** (cuando no hay resíntesis) se mide igual que el de RECREAR al terminar. Durante la búsqueda, el optimizador usa su propia distancia interna, que no se muestra.
+
+## FORGE (síntesis inversa, rama `feature/nebula-0.4.0`)
+
+Las cifras están en `docs/0.4.0/P3-P6.md`.
+
+- **El % de FORGE es fidelidad de recreación.** Es una medida objetiva, no una prueba de escucha.
+- **Campanas FM y pads largos se recuperan peor** que bajos, 808 y plucks: en la recuperación interna, una FM_BELL quedó en 34 %.
+- **Una receta parecida no es la receta original.** En pads, la receta encontrada puede estar tan lejos en parámetros como un patch al azar.
+- **CMA-ES está implementado,** pero con el presupuesto actual la búsqueda local da mejores resultados. Por eso es la opción por defecto.
+- **Cosmos/Abismo de la receta** cambia el patch nativo, de forma reversible. No es lo mismo que la transformación del motor, que procesa el audio. Las dos conviven en TRANSFORMAR.
+- **No hay un botón** para volver a una generación anterior de FORGE: se conservan, pero sólo por API.

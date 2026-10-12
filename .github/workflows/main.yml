@@ -1,4 +1,4 @@
-name: Compilar Nebula para Mac
+name: Compilar Nebula (Mac y Windows)
 
 on:
   push:
@@ -67,6 +67,7 @@ jobs:
           run Transform
           run Forge
           run ForgeDb
+          run Genome
           run Render test-output/render
           run V21 test-output/v21
           run V2 test-output/v2
@@ -110,6 +111,24 @@ jobs:
           fi
           tail -5 auval.log
 
+      - name: pluginval (VST3 y AU)
+        continue-on-error: true
+        run: |
+          curl -sSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
+          unzip -q -o pluginval.zip -d pluginval
+          PV=pluginval/pluginval.app/Contents/MacOS/pluginval
+          A=build/NebulaSynth_artefacts/Release
+          for f in "VST3/Nebula.vst3" "AU/Nebula.component"; do
+            n=$(basename "$f")
+            if "$PV" --strictness-level 5 --validate-in-process --timeout-ms 600000 --validate "$A/$f" > "pluginval-$n.log" 2>&1; then
+              echo "::notice title=pluginval $n::pluginval nivel 5 aprobado"
+            else
+              grep -E "FAILED|\*\*\*|Error" "pluginval-$n.log" | head -10 | while IFS= read -r l; do echo "::warning title=pluginval $n::$l"; done
+              echo "::warning title=pluginval $n::pluginval nivel 5 NO aprobado"
+            fi
+            tail -5 "pluginval-$n.log"
+          done
+
       - name: Crear instalador .pkg
         run: |
           chmod +x packaging/make_installer.sh
@@ -121,3 +140,89 @@ jobs:
           name: Nebula-Instalador-${{ steps.ver.outputs.version }}
           path: dist/*.pkg
           retention-days: 30
+
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 120
+
+    steps:
+      - name: Descargar el codigo
+        uses: actions/checkout@v4
+
+      - name: Configurar (descarga JUCE)
+        run: cmake -B build -G "Visual Studio 17 2022" -A x64 -DNEBULA_BUILD_TESTS=ON
+
+      - name: Compilar VST3 y app
+        shell: bash
+        run: |
+          set -o pipefail
+          cmake --build build --config Release --parallel 4 --target NebulaSynth_VST3 NebulaSynth_Standalone 2>&1 | tee build-plugin.log || {
+            grep -E "error C|error LNK|: error" build-plugin.log | head -20 | while IFS= read -r l; do echo "::error::$l"; done
+            exit 1
+          }
+
+      - name: Compilar pruebas
+        shell: bash
+        run: |
+          set -o pipefail
+          cmake --build build --config Release --parallel 4 --target NebulaTests 2>&1 | tee build-tests.log || {
+            grep -E "error C|error LNK|: error" build-tests.log | head -20 | while IFS= read -r l; do echo "::error::$l"; done
+            exit 1
+          }
+
+      - name: Pruebas de motor y estabilidad (Windows)
+        shell: bash
+        run: |
+          T=./build/NebulaTests_artefacts/Release/NebulaTests.exe
+          mkdir -p test-output
+          fallos=0
+          run() {
+            local name="$1"; shift
+            "$T" "$name" "$@" > "test-output/$name.log" 2>&1
+            local rc=$?
+            cat "test-output/$name.log"
+            if [ $rc -ne 0 ]; then
+              fallos=$((fallos+1))
+              echo "::error title=Windows $name::la prueba termino con codigo $rc"
+              grep -E "FALLO" "test-output/$name.log" | head -20 | while IFS= read -r l; do echo "::error title=Windows $name::$l"; done
+            else
+              echo "::notice title=Windows $name::$(tail -1 "test-output/$name.log")"
+            fi
+          }
+          set +e
+          run Stereo
+          run Determinism tests/fixtures/v3
+          run Midi
+          run Dna
+          run Transform
+          run Forge
+          run ForgeDb
+          run Genome
+          run Ui test-output/ui
+          if [ "$fallos" -gt 0 ]; then echo "::error::$fallos pruebas fallaron en Windows"; exit 1; fi
+
+      - name: pluginval (VST3, Windows)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip -OutFile pluginval.zip
+          Expand-Archive -Path pluginval.zip -DestinationPath pluginval -Force
+          $vst = "build\NebulaSynth_artefacts\Release\VST3\Nebula.vst3"
+          $p = Start-Process -FilePath "pluginval\pluginval.exe" -ArgumentList "--strictness-level 5 --validate-in-process --timeout-ms 600000 --validate `"$vst`"" -NoNewWindow -Wait -PassThru -RedirectStandardOutput pluginval-win.log
+          Get-Content pluginval-win.log -Tail 8
+          if ($p.ExitCode -eq 0) { Write-Output "::notice title=pluginval Windows::pluginval nivel 5 aprobado (VST3)" }
+          else {
+            Select-String -Path pluginval-win.log -Pattern "FAILED|\*\*\*|Error" | Select-Object -First 10 | ForEach-Object { Write-Output "::warning title=pluginval Windows::$($_.Line)" }
+            Write-Output "::warning title=pluginval Windows::pluginval nivel 5 NO aprobado (codigo $($p.ExitCode))"
+          }
+
+      - name: Subir VST3 de Windows y resultados
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nebula-Windows
+          path: |
+            build/NebulaSynth_artefacts/Release/VST3
+            test-output
+            pluginval-win.log
+          retention-days: 14

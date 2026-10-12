@@ -1,5 +1,5 @@
 #pragma once
-#include "Panels.h"
+#include "GenomeUI.h"
 
 // ===========================================================================
 // FORGE: busca recetas del motor Synth para el sample (síntesis inversa). Cada candidato se escucha, se
@@ -9,16 +9,19 @@
 class ForgeRow : public juce::Component
 {
 public:
-    std::function<void()> onPlay, onUse, onMutate;
+    std::function<void()> onPlay, onUse, onMutate, onPick;
 
     ForgeRow()
     {
-        for (auto* b : { &play, &use, &mutate }) { addAndMakeVisible (b); b->horizontal = true; }
+        for (auto* b : { &play, &use, &mutate, &pick }) { addAndMakeVisible (b); b->horizontal = true; }
         use.colour = NebulaColours::accent; use.filled = true;
+        pick.colour = NebulaColours::abyss;
         play.onClick = [this] { if (onPlay) onPlay(); };
         use.onClick = [this] { if (onUse) onUse(); };
         mutate.onClick = [this] { if (onMutate) onMutate(); };
+        pick.onClick = [this] { if (onPick) onPick(); };
     }
+    void setPicked (bool on) { pick.setToggleState (on, juce::dontSendNotification); }
 
     void set (const Forge::PatchCandidate& c, bool isBest) { cand = c; best = isBest; repaint(); }
 
@@ -72,30 +75,38 @@ public:
         r = r.withSizeKeepingCentre (r.getWidth(), h);
         play.setBounds (r.removeFromLeft (40).reduced (2, 0));
         use.setBounds (r.removeFromLeft (72).reduced (2, 0));
-        mutate.setBounds (r.reduced (2, 0));
+        mutate.setBounds (r.removeFromLeft (84).reduced (2, 0));
+        pick.setBounds (r.reduced (2, 0));
     }
 
 private:
-    static constexpr int buttonsWidth = 196;
+    static constexpr int buttonsWidth = 196 + 64;
     Forge::PatchCandidate cand;
     bool best = false;
     IconButton play { "", Icons::play(), "Escuchar este candidato (no cambia tu sonido)" },
                use { "Usar", Icons::wand(), "Este patch pasa a ser tu sonido: osciladores, filtros y envolventes reales (ya no necesita el sample)" },
-               mutate { "Mutar", Icons::dice(), "Nueva generacion: 8 descendientes de este candidato, medidos contra la referencia" };
+               mutate { "Mutar", Icons::dice(), "Nueva generacion: 8 descendientes de este candidato, medidos contra la referencia" },
+               pick { "Par", Icons::dna(), "Elegir para cruzar: elige dos candidatos y pulsa Cruzar" };
 };
 
 class ForgePanel : public juce::Component, private juce::Timer
 {
 public:
-    explicit ForgePanel (NebulaAudioProcessor& p) : proc (p)
+    std::function<void()> onClose;   // en el espacio DESCUBRIR: volver a CREAR
+
+    explicit ForgePanel (NebulaAudioProcessor& p) : proc (p), locks (p)
     {
-        for (auto* b : { &searchButton, &cancelButton, &refButton, &closeButton, &stopButton }) { addAndMakeVisible (b); b->horizontal = true; }
+        for (auto* b : { &searchButton, &cancelButton, &refButton, &closeButton, &stopButton, &crossButton }) { addAndMakeVisible (b); b->horizontal = true; }
+        addAndMakeVisible (graphView);
+        addAndMakeVisible (locks);
+        crossButton.colour = NebulaColours::abyss;
+        crossButton.onClick = [this] { crossover(); };
         searchButton.colour = NebulaColours::accent; searchButton.filled = true;
         searchButton.onClick = [this] { search(); };
         cancelButton.onClick = [this] { proc.cancelForge(); status = "Cancelado"; };
         refButton.onClick = [this] { proc.auditionForgeReference(); };
         stopButton.onClick = [this] { proc.stopPreview(); };
-        closeButton.onClick = [this] { setVisible (false); };
+        closeButton.onClick = [this] { if (onClose) onClose(); else setVisible (false); };
         seedBox.setInputRestrictions (9, "0123456789");
         seedBox.setText ("1", juce::dontSendNotification);
         seedBox.setJustification (juce::Justification::centred);
@@ -118,8 +129,11 @@ public:
     void paint (juce::Graphics& g) override
     {
         using namespace NebulaColours;
-        drawOverlayFrame (g, getLocalBounds(), Icons::sparkle(), "FORGE  SINTESIS INVERSA",
+        drawOverlayFrame (g, getLocalBounds(), Icons::sparkle(), "DESCUBRIR  FORGE: SINTESIS INVERSA",
                           "Recetas del motor Synth para tu sample. Suenan sin el sample. El % es fidelidad de recreacion, no calidad musical.");
+        g.setColour (textDim);
+        g.setFont (juce::FontOptions (10.5f));
+        g.drawText ("CANDADOS: los modulos bloqueados no cambian al mutar ni al cruzar", locksLabel, juce::Justification::centredLeft);
         g.setFont (juce::FontOptions (11.5f));
         g.setColour (text.withAlpha (0.9f));
         g.drawFittedText (refText, refArea, juce::Justification::topLeft, 3);
@@ -155,12 +169,30 @@ public:
         refArea = r.removeFromTop (44);
         progressArea = r.removeFromTop (4);
         r.removeFromTop (8);
+        auto bottom = r.removeFromBottom (juce::jmin (190, r.getHeight() / 2));
         viewport.setBounds (r);
+        bottom.removeFromTop (6);
+        auto lockArea = bottom.removeFromBottom (32);
+        locksLabel = bottom.removeFromBottom (16);
+        crossButton.setBounds (bottom.removeFromRight (150).removeFromTop (30).reduced (2));
+        bottom.removeFromRight (6);
+        graphView.setBounds (bottom);
+        locks.setBounds (lockArea);
         layoutList();
     }
 
 private:
     struct ListComp : public juce::Component {};
+
+    void crossover()
+    {
+        if (picked.size() != 2) { status = "Elige dos candidatos con \"Par\" para cruzarlos"; repaint(); return; }
+        const auto seed = juce::jmax ((juce::int64) 1, seedBox.getText().getLargeIntValue());
+        if (proc.forgeCrossover (picked[0], picked[1], seed)) status = "Cruzando por modulos...";
+        else status = "Para medir a los hijos hace falta el sample de referencia";
+        picked.clear();
+        repaint();
+    }
 
     void search()
     {
@@ -177,13 +209,22 @@ private:
         const auto ref = proc.forgeReference();
         refText = ref.lengthS > 0 ? "Referencia: " + ref.name + " - " + ref.summary() : juce::String ("Pulsa Buscar: Nebula analiza la seccion del sample y busca recetas.");
         for (auto& w : ref.warnings) refText << "\nAviso: " << w;
+        if (proc.forgeDiagnosticsText().isNotEmpty()) refText << "\nBusqueda: " << proc.forgeDiagnosticsText();
         rows.clear();
         for (size_t i = 0; i < cands.size(); ++i)
         {
             auto row = std::make_unique<ForgeRow>();
             row->set (cands[i], i == 0);
             const int idx = (int) i;
-            row->onPlay = [this, idx] { proc.auditionForgeCandidate (idx); };
+            row->onPlay = [this, idx, c = cands[i]] { proc.auditionForgeCandidate (idx); graphView.setPatch (c.patch, c.id + "  " + c.patch.architecture); };
+            row->onPick = [this, idx]
+            {
+                auto it = std::find (picked.begin(), picked.end(), idx);
+                if (it != picked.end()) picked.erase (it);
+                else { picked.push_back (idx); if (picked.size() > 2) picked.erase (picked.begin()); }
+                for (size_t k = 0; k < rows.size(); ++k) rows[k]->setPicked (std::find (picked.begin(), picked.end(), (int) k) != picked.end());
+                crossButton.setEnabled (picked.size() == 2);
+            };
             row->onUse = [this, idx, c = cands[i]]
             {
                 proc.applySynthPatch (c.patch);
@@ -201,6 +242,10 @@ private:
             rows.push_back (std::move (row));
         }
         seenRuns = proc.forgeRuns.load();
+        picked.clear();
+        crossButton.setEnabled (false);
+        if (! cands.empty()) graphView.setPatch (cands.front().patch, cands.front().id + "  " + cands.front().patch.architecture);
+        else graphView.setPatch (proc.currentSynthPatch(), "Receta actual");
         if (! cands.empty() && ! proc.isForging())
             status = juce::String ((int) cands.size()) + " candidatos, generacion " + juce::String (cands.front().generation)
                    + (proc.forgeGenerations().empty() ? juce::String() : "  (" + juce::String ((int) proc.forgeGenerations().size()) + " anteriores guardadas)");
@@ -219,6 +264,7 @@ private:
     void timerCallback() override
     {
         searchButton.setEnabled (! proc.isForging());
+        crossButton.setEnabled (! proc.isForging() && picked.size() == 2);
         cancelButton.setEnabled (proc.isForging());
         if (proc.forgeRuns.load() != seenRuns) refresh();
         if (proc.isForging()) repaint();
@@ -229,7 +275,12 @@ private:
                cancelButton { "Cancelar", Icons::stop(), "Detener la busqueda" },
                refButton { "Referencia", Icons::speaker(), "Escuchar la referencia (afinada a su tecla)" },
                stopButton { "", Icons::stop(), "Detener la escucha" },
-               closeButton { "Cerrar", Icons::back(), "Cerrar FORGE" };
+               closeButton { "Cerrar", Icons::back(), "Volver a CREAR" },
+               crossButton { "Cruzar", Icons::dice(), "8 hijos que toman cada modulo entero de uno de los dos elegidos (respetando candados)" };
+    PatchGraphView graphView;
+    ModuleLockStrip locks;
+    std::vector<int> picked;
+    juce::Rectangle<int> locksLabel;
     juce::TextEditor seedBox;
     juce::Viewport viewport;
     ListComp list;

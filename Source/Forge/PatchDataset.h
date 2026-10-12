@@ -1,6 +1,9 @@
 #pragma once
 #include "Fingerprint.h"
 #include "PatchRenderer.h"
+#if NEBULA_HAS_FORGE_DATA
+ #include <BinaryData.h>
+#endif
 
 // ===========================================================================
 // FORGE · DNA_DATABASE + PATCH_RETRIEVER
@@ -164,6 +167,13 @@ namespace Forge
     {
         juce::String tag;
         std::vector<DnaEntry> entries;
+        mutable juce::CriticalSection cacheLock;
+        mutable std::array<std::vector<int>, (size_t) Category::count> variedCache;
+        Dataset() = default;
+        Dataset (const Dataset& o) : tag (o.tag), entries (o.entries) {}
+        Dataset& operator= (const Dataset& o) { tag = o.tag; entries = o.entries; for (auto& v : variedCache) v.clear(); return *this; }
+        Dataset (Dataset&& o) noexcept : tag (std::move (o.tag)), entries (std::move (o.entries)) {}
+        Dataset& operator= (Dataset&& o) noexcept { tag = std::move (o.tag); entries = std::move (o.entries); for (auto& v : variedCache) v.clear(); return *this; }
 
         // Genera "perCategory" patches por categoría (determinista). progress: 0..1
         static Dataset generate (int perCategory, std::function<void (float)> progress = {}, std::atomic<bool>* cancel = nullptr)
@@ -258,8 +268,39 @@ namespace Forge
         }
         bool isCurrent() const { return tag == engineTag(); }
 
+        // Parámetros que varían dentro de una categoría (índices en synthParams()), ordenados por su rango
+        const std::vector<int>& variedParams (Category c) const
+        {
+            const juce::ScopedLock sl (cacheLock);
+            auto& v = variedCache[(size_t) c];
+            if (! v.empty() || entries.empty()) return v;
+            std::vector<std::pair<float, int>> spread;
+            for (size_t i = 0; i < synthParams().size(); ++i)
+            {
+                float mn = 1, mx = 0;
+                for (auto& e : entries) if (e.category == c && i < e.norm.size()) { mn = juce::jmin (mn, e.norm[i]); mx = juce::jmax (mx, e.norm[i]); }
+                if (mx - mn > 0.02f) spread.push_back ({ mx - mn, (int) i });
+            }
+            std::sort (spread.begin(), spread.end(), [] (auto& a, auto& b) { return a.first > b.first; });
+            for (auto& [r, i] : spread) v.push_back (i);
+            return v;
+        }
+
+        // Consulta en dos pasadas: la categoría no se conoce, así que primero se buscan vecinos con pesos generales,
+        // se vota la categoría, y se vuelve a buscar con los pesos de esa categoría
+
         // ---------- búsqueda de vecinos ----------
         struct Hit { int index; float distance; };
+
+        std::vector<Hit> query (const FingerprintVec& q, int k, int splitMask, float diversity, int* categoryOut = nullptr) const
+        {
+            const auto first = nearest (q, weightsFor (Category::Lead), 7, splitMask);
+            int votes[(int) Category::count] {};
+            for (auto& h : first) ++votes[(int) entries[(size_t) h.index].category];
+            const int guess = (int) (std::max_element (std::begin (votes), std::end (votes)) - std::begin (votes));
+            if (categoryOut != nullptr) *categoryOut = guess;
+            return nearest (q, weightsFor ((Category) guess), k, splitMask, diversity);
+        }
 
         // k vecinos por la distancia ponderada; splitMask: qué particiones se buscan (bit 0 prueba, 1 val, 2 entr.)
         // diversity: no devuelve dos entradas a menos de esa distancia entre sí (CANDIDATE_DIVERSITY)
@@ -288,4 +329,20 @@ namespace Forge
             return out;
         }
     };
+
+    // La base incluida en el plugin (se descomprime la primera vez que se usa)
+    inline const Dataset* builtInDataset()
+    {
+       #if NEBULA_HAS_FORGE_DATA
+        static const Dataset d = []
+        {
+            Dataset x;
+            x.fromBinary (BinaryData::nebula_dna_ndb, (size_t) BinaryData::nebula_dna_ndbSize);
+            return x;
+        }();
+        return d.entries.empty() ? nullptr : &d;
+       #else
+        return nullptr;
+       #endif
+    }
 }

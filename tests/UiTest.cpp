@@ -150,8 +150,48 @@ int NEBULA_TEST_ENTRY (int argc, char** argv)
         click ("Usar");
         pump (200);
         if (juce::roundToInt (proc->state.getRawParameterValue (ParamID::engine)->load()) != Engine::Synth) { std::printf ("FALLO: Usar no paso al motor Synth\n"); ++uiFailures; }
+        // Cruzar dos candidatos desde la interfaz (botones "Par" y "Cruzar")
+        {
+            std::vector<juce::Button*> pairs;
+            walk (ed.get(), [&] (juce::Component* c) { if (auto* b = dynamic_cast<juce::Button*> (c); b && b->getButtonText() == "Par" && visible (b)) pairs.push_back (b); });
+            if (pairs.size() >= 2) { pairs[0]->onClick(); pairs[1]->onClick(); }
+            pump (100);
+            const int gen0 = proc->forgeCandidates().empty() ? 0 : proc->forgeCandidates().front().generation;
+            click ("Cruzar");
+            pump (200);
+            for (int k = 0; k < 900 && proc->isForging(); ++k) pump (100);
+            pump (400);
+            save (shot (1.0f), "ui_descubrir_cruce.png");
+            const auto kids = proc->forgeCandidates();
+            if (kids.size() < 8 || kids.front().generation != gen0 + 1 || kids.front().source != "cruce") { std::printf ("FALLO: Cruzar desde la interfaz no dio 8 hijos\n"); ++uiFailures; }
+        }
         click ("Cerrar");
         pump (100);
+        if (find ("RECREAR") == nullptr) { std::printf ("FALLO: Cerrar no volvio a CREAR\n"); ++uiFailures; }
+        // TRANSFORMAR: Cosmos/Abismo sobre la receta, reversible
+        {
+            const auto before = proc->currentSynthPatch();
+            click ("TRANSFORMAR");
+            pump (200);
+            if (auto* tv = first ((TransformView*) nullptr))
+                walk (tv, [&] (juce::Component* c) { if (auto* s = dynamic_cast<RecipePolaritySlider*> (c)) s->setValue (0.6); });
+            pump (400);
+            save (shot (1.0f), "ui_transformar_cosmos.png");
+            const bool moved = proc->recipePolarityActive() && ! proc->currentSynthPatch().sameSound (before, 1.0e-4f);
+            if (auto* tv = first ((TransformView*) nullptr))
+                walk (tv, [&] (juce::Component* c) { if (auto* s = dynamic_cast<RecipePolaritySlider*> (c)) s->setValue (-0.8); });
+            pump (400);
+            save (shot (1.0f), "ui_transformar_abismo.png");
+            click ("Volver a la base");
+            pump (200);
+            if (! moved || proc->recipePolarityActive() || ! proc->currentSynthPatch().sameSound (before, 1.0e-4f))
+            { std::printf ("FALLO: TRANSFORMAR no movio la receta o no volvio exacta a la base\n"); ++uiFailures; }
+            click ("DESCUBRIR");
+            pump (300);
+            save (shot (1.0f), "ui_descubrir.png");
+            click ("CREAR");
+            pump (200);
+        }
         click ("RECREAR");
         pump (1300);
         click ("Receta");
