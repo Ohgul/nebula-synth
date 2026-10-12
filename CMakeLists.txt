@@ -52,6 +52,15 @@ target_compile_definitions(NebulaSynth PUBLIC
     JUCE_DISPLAY_SPLASH_SCREEN=0
 )
 
+# FORGE: base de patches nativos con su huella sonora (generada con "NebulaTests ForgeDb generar")
+set(NEBULA_FORGE_DATA "${CMAKE_CURRENT_SOURCE_DIR}/Resources/forge/nebula_dna.ndb")
+if(EXISTS "${NEBULA_FORGE_DATA}")
+    juce_add_binary_data(NebulaForgeData SOURCES "${NEBULA_FORGE_DATA}")
+    set_target_properties(NebulaForgeData PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    target_link_libraries(NebulaSynth PRIVATE NebulaForgeData)
+    target_compile_definitions(NebulaSynth PRIVATE NEBULA_HAS_FORGE_DATA=1)
+endif()
+
 target_link_libraries(NebulaSynth
     PRIVATE
         juce::juce_audio_utils
@@ -69,7 +78,7 @@ option(NEBULA_BUILD_TESTS "Compilar las pruebas sin DAW" OFF)
 if(NEBULA_BUILD_TESTS)
     set(NEBULA_TEST_NAMES "")
     set(NEBULA_TEST_FILES "")
-    foreach(t Render Imitate V2 V21 V3 Ui Bench Stereo Determinism Midi Dna Transform Forge)
+    foreach(t Render Imitate V2 V21 V3 Ui Bench Stereo Determinism Midi Dna Transform Forge ForgeDb)
         if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/${t}Test.cpp")
             message(STATUS "Prueba no encontrada (se omite): ${t}Test.cpp")
             continue()
@@ -91,4 +100,8 @@ if(NEBULA_BUILD_TESTS)
         JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_DISPLAY_SPLASH_SCREEN=0 JUCE_MODAL_LOOPS_PERMITTED=1)
     target_link_libraries(NebulaTests PRIVATE
         juce::juce_audio_utils juce::juce_dsp juce::juce_recommended_config_flags)
+    if(TARGET NebulaForgeData)
+        target_link_libraries(NebulaTests PRIVATE NebulaForgeData)
+        target_compile_definitions(NebulaTests PRIVATE NEBULA_HAS_FORGE_DATA=1)
+    endif()
 endif()

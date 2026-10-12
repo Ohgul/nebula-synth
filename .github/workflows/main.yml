@@ -66,6 +66,7 @@ jobs:
           run Dna
           run Transform
           run Forge
+          run ForgeDb
           run Render test-output/render
           run V21 test-output/v21
           run V2 test-output/v2
