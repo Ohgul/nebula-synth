@@ -14,11 +14,32 @@
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter();
 
+// Contador de asignaciones de memoria (reemplaza el operator new global de todo el ejecutable de pruebas;
+// sólo cuenta mientras countAllocs está activo, en el hilo que llama a processBlock)
+static std::atomic<long> allocCount { 0 };
+static thread_local bool countAllocs = false;
+void* operator new (std::size_t n)
+{
+    if (countAllocs) ++allocCount;
+    if (void* p = std::malloc (n == 0 ? 1 : n)) return p;
+    throw std::bad_alloc();
+}
+void* operator new[] (std::size_t n)
+{
+    if (countAllocs) ++allocCount;
+    if (void* p = std::malloc (n == 0 ? 1 : n)) return p;
+    throw std::bad_alloc();
+}
+void operator delete (void* p) noexcept { std::free (p); }
+void operator delete[] (void* p) noexcept { std::free (p); }
+void operator delete (void* p, std::size_t) noexcept { std::free (p); }
+void operator delete[] (void* p, std::size_t) noexcept { std::free (p); }
+
 namespace {
 
 constexpr double sr = 48000.0;
 
-struct BlockLog { double ms = 0, ratio = 0; int n = 0, notes = 0; bool quality = false; juce::StringArray changed; };
+struct BlockLog { double ms = 0, ratio = 0; int n = 0, notes = 0; bool quality = false; long allocs = 0; juce::StringArray changed; };
 
 // Tiempo de CPU del hilo (no cuenta cuando el sistema le quita el núcleo: así un pico es del plugin y no del
 // equipo compartido). En Windows la resolución del tiempo de hilo es de ~15 ms: se usa el reloj de pared.
@@ -40,6 +61,18 @@ int NEBULA_TEST_ENTRY (int argc, char** argv)
     juce::ScopedJuceInitialiser_GUI gui;
     const double seconds = argc > 1 ? juce::jmax (5.0, juce::String (argv[1]).getDoubleValue()) : 60.0;
     int failures = 0;
+    {
+        // el contador funciona (si no, "0 asignaciones" no probaría nada)
+        const long a0 = allocCount.load();
+        countAllocs = true;
+        auto* v = new std::vector<int> (1000, 7);
+        const int sum = (*v)[999];
+        delete v;
+        countAllocs = false;
+        const bool works = allocCount.load() - a0 >= 2 && sum == 7;
+        std::printf ("%-60s %s\n", "El contador de asignaciones funciona", works ? "OK   " : "FALLO");
+        if (! works) ++failures;
+    }
     const char* names[] { "Sinte", "Sample", "Resintesis" };
     for (int engine = 0; engine < 3; ++engine)
     {
@@ -87,9 +120,13 @@ int NEBULA_TEST_ENTRY (int argc, char** argv)
                     lg.changed.add (prm->getParameterID());
                 }
             if (rnd.nextFloat() < 0.002f) { auto* q = p->state.getParameter (ParamID::quality); q->setValueNotifyingHost (q->convertTo0to1 ((float) rnd.nextInt (3))); lg.quality = true; ++qualityChanges; }
+            const long a0 = allocCount.load();
+            countAllocs = true;
             const double a = threadMs();
             p->processBlock (buf, midi);
             lg.ms = threadMs() - a;
+            countAllocs = false;
+            lg.allocs = allocCount.load() - a0;
             lg.ratio = lg.ms / (1000.0 * n / sr);
             const bool slow = lg.ratio > 1.0;
             for (auto& id : lg.changed) { ++changesPer[id]; if (slow) ++slowPer[id]; }
@@ -105,7 +142,29 @@ int NEBULA_TEST_ENTRY (int argc, char** argv)
         int slowCount = 0; for (auto& l : logs) slowCount += l.ratio > 1.0 ? 1 : 0;
         std::printf ("\n== %s: %d bloques, %d mas lentos que su duracion (%.3f %%); sin cambios de parametro: %d de %d lentos\n", names[engine], (int) logs.size(), slowCount,
                      100.0 * slowCount / juce::jmax ((size_t) 1, logs.size()), slowNoChange, blocksNoChange);
-        std::printf ("   cambios de calidad: %d (%d lentos)\n", qualityChanges, slowQuality);
+        double worstQuality = 0;
+        long allocBlocks = 0, allocBlocksQuality = 0, allocTotal = 0;
+        std::map<juce::String, int> allocWith;
+        for (auto& l : logs)
+        {
+            if (l.quality) worstQuality = juce::jmax (worstQuality, l.ratio);
+            if (l.allocs > 0)
+            {
+                ++allocBlocks; allocTotal += l.allocs;
+                if (l.quality) ++allocBlocksQuality;
+                for (auto& id : l.changed) ++allocWith[id];
+                if (l.changed.isEmpty() && ! l.quality) ++allocWith[l.notes > 0 ? "(nota)" : "(nada)"];
+            }
+        }
+        std::printf ("   bloques que piden memoria: %ld de %d (%ld con cambio de calidad), %ld asignaciones en total\n", allocBlocks, (int) logs.size(), allocBlocksQuality, allocTotal);
+        std::printf ("%-60s %s  %ld bloques\n", (juce::String (names[engine]) + ": el hilo de audio no pide memoria").toRawUTF8(), allocBlocks == 0 ? "OK   " : "FALLO", allocBlocks);
+        if (allocBlocks != 0) ++failures;
+        {
+            std::vector<std::pair<int, juce::String>> v; for (auto& [id, c] : allocWith) v.push_back ({ c, id });
+            std::sort (v.begin(), v.end(), [] (auto& x, auto& y) { return x.first > y.first; });
+            for (size_t k = 0; k < juce::jmin ((size_t) 10, v.size()); ++k) std::printf ("     con %-16s %d bloques\n", v[k].second.toRawUTF8(), v[k].first);
+        }
+        std::printf ("   cambios de calidad: %d (%d lentos, el peor %.2fx su duracion)\n", qualityChanges, slowQuality, worstQuality);
         for (size_t k = 0; k < juce::jmin ((size_t) 8, order.size()); ++k)
         {
             const auto& l = logs[order[k]];

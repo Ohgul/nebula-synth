@@ -194,6 +194,8 @@ private:
 class ResynthPlayer
 {
 public:
+    void reserve (double maxSampleRate) { haas.reserve ((size_t) (maxSampleRate * 0.02) + 2); }   // ver TransformVoice::reserve
+
     void prepare (double sampleRate)
     {
         sr = sampleRate;

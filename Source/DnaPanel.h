@@ -293,7 +293,7 @@ private:
     static juce::String groupTitle (const juce::String& g)
     {
         const auto& names = Dna::groupNames();
-        const int i = juce::jlimit (0, names.size() - 1, g[0] - 'A');
+        const int i = juce::jlimit (0, names.size() - 1, (int) g[0] - (int) 'A');
         return names[i].toUpperCase();
     }
 

@@ -527,7 +527,10 @@ void NebulaAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
     synth.setCurrentPlaybackSampleRate (sampleRate);
     for (int i = 0; i < synth.getNumVoices(); ++i)
         if (auto* v = dynamic_cast<SynthVoice*> (synth.getVoice (i)))
+        {
+            v->reserveFor (sampleRate * 4.0);
             v->prepare (sampleRate);
+        }
 
     maxBlock = juce::jmax (16, samplesPerBlockExpected);
     os2 = std::make_unique<juce::dsp::Oversampling<float>> (2, 1, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, false);
@@ -562,7 +565,7 @@ void NebulaAudioProcessor::restartRandomSequence()
     currentFactor = 1;
     synth.setCurrentPlaybackSampleRate (currentSampleRate);
     for (int i = 0; i < synth.getNumVoices(); ++i)
-        if (auto* v = dynamic_cast<SynthVoice*> (synth.getVoice (i))) v->prepare (currentSampleRate);
+        if (auto* v = dynamic_cast<SynthVoice*> (synth.getVoice (i))) { v->reserveFor (currentSampleRate * 4.0); v->prepare (currentSampleRate); }
     dcX[0] = dcX[1] = dcY[0] = dcY[1] = 0.0f;
     masterGain.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (state.getRawParameterValue (ParamID::master)->load(), -60.0f));
 }

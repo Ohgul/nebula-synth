@@ -44,6 +44,14 @@ namespace Transform
 class TransformVoice
 {
 public:
+    // Reserva memoria para la frecuencia más alta que se va a usar (4x): así prepare() al cambiar la Calidad
+    // en pleno audio no reasigna (assign dentro de la capacidad reservada no pide memoria)
+    void reserve (double maxSampleRate)
+    {
+        frag.reserve ((size_t) (maxSampleRate * 0.6) + 4);
+        for (auto& ch : ap) for (auto& a : ch) a.buf.reserve ((size_t) (maxSampleRate * 0.05) + 4);
+    }
+
     void prepare (double sampleRate)
     {
         sr = sampleRate;

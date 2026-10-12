@@ -170,22 +170,35 @@ int NEBULA_TEST_ENTRY (int argc, char** argv)
         if (find ("RECREAR") == nullptr) { std::printf ("FALLO: Cerrar no volvio a CREAR\n"); ++uiFailures; }
         // TRANSFORMAR: Cosmos/Abismo sobre la receta, reversible
         {
-            const auto before = proc->currentSynthPatch();
             click ("TRANSFORMAR");
             pump (200);
-            if (auto* tv = first ((TransformView*) nullptr))
-                walk (tv, [&] (juce::Component* c) { if (auto* s = dynamic_cast<RecipePolaritySlider*> (c)) s->setValue (0.6); });
+            auto setBar = [&] (double v)
+            {
+                if (auto* tv = first ((TransformView*) nullptr))
+                    walk (tv, [&] (juce::Component* c) { if (auto* s = dynamic_cast<RecipePolaritySlider*> (c)) s->setValue (v, juce::sendNotificationSync); });
+            };
+            setBar (0.6);
+            // la base es la receta que sonaba al mover la barra (otras partes de la interfaz pueden haberla tocado antes)
+            Forge::SynthPatch base;
+            if (auto x = juce::parseXML (proc->state.state["forgePolarity"].toString())) base = Forge::PolarityEdit::fromValueTree (juce::ValueTree::fromXml (*x)).base;
             pump (400);
             save (shot (1.0f), "ui_transformar_cosmos.png");
-            const bool moved = proc->recipePolarityActive() && ! proc->currentSynthPatch().sameSound (before, 1.0e-4f);
-            if (auto* tv = first ((TransformView*) nullptr))
-                walk (tv, [&] (juce::Component* c) { if (auto* s = dynamic_cast<RecipePolaritySlider*> (c)) s->setValue (-0.8); });
+            const bool moved = proc->recipePolarityActive() && proc->currentSynthPatch().sameSound (Forge::polarize (base, 0.6f, proc->forgeLocks()), 1.0e-4f)
+                            && ! proc->currentSynthPatch().sameSound (base, 1.0e-4f);
+            setBar (-0.8);
             pump (400);
             save (shot (1.0f), "ui_transformar_abismo.png");
             click ("Volver a la base");
             pump (200);
-            if (! moved || proc->recipePolarityActive() || ! proc->currentSynthPatch().sameSound (before, 1.0e-4f))
-            { std::printf ("FALLO: TRANSFORMAR no movio la receta o no volvio exacta a la base\n"); ++uiFailures; }
+            const auto now = proc->currentSynthPatch();
+            if (! moved || proc->recipePolarityActive() || ! now.sameSound (base, 1.0e-4f))
+            {
+                std::printf ("FALLO: TRANSFORMAR no movio la receta o no volvio exacta a la base (movio %d, activa %d)\n", (int) moved, (int) proc->recipePolarityActive());
+                for (auto& info : Forge::synthParams())
+                    if (std::abs (now.getNorm (info.id) - base.getNorm (info.id)) > 1.0e-4f)
+                        std::printf ("   difiere %s: ahora %.4f base %.4f\n", info.id.toRawUTF8(), now.get (info.id), base.get (info.id));
+                ++uiFailures;
+            }
             click ("DESCUBRIR");
             pump (300);
             save (shot (1.0f), "ui_descubrir.png");

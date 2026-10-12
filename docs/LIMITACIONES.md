@@ -60,4 +60,4 @@ Las cifras están en `docs/0.4.0/P3-P6.md`.
 - **Una receta parecida no es la receta original.** En pads, la receta encontrada puede estar tan lejos en parámetros como un patch al azar.
 - **CMA-ES está implementado,** pero con el presupuesto actual la búsqueda local da mejores resultados. Por eso es la opción por defecto.
 - **Cosmos/Abismo de la receta** cambia el patch nativo, de forma reversible. No es lo mismo que la transformación del motor, que procesa el audio. Las dos conviven en TRANSFORMAR.
-- **Cambiar la Calidad mientras suena** reasigna el sobremuestreo en el hilo de audio y puede producir un corte. El resto de la automatización no produce picos (prueba `Realtime`).
+- **Cambiar la Calidad mientras suena** ya no pide memoria en el hilo de audio, pero ese bloque cuesta hasta ~10× su duración y puede producir un corte. El resto de la automatización no produce picos (prueba `Realtime`).
