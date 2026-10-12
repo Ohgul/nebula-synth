@@ -293,7 +293,9 @@ namespace ParamFormat
     }
 }
 
-inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
+// Lista de parámetros (objetos sueltos): la usa el plugin y también el renderizador offline de FORGE,
+// que necesita los mismos rangos y valores por defecto sin depender de un procesador.
+inline std::vector<std::unique_ptr<juce::RangedAudioParameter>> createParameterList()
 {
     using namespace juce;
     using F = AudioParameterFloat;
@@ -516,6 +518,12 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
     add (new F ({ ParamID::identity, 1 }, "Identidad", unit, 0.0f, pct));
     add (new F ({ ParamID::transformOut, 1 }, "Cosmos/Abismo Salida", NormalisableRange<float> (-24.0f, 6.0f), 0.0f, Attr().withStringFromValueFunction (ParamFormat::decibels)));
 
+    return p;
+}
+
+inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
+{
+    auto p = createParameterList();
     return { p.begin(), p.end() };
 }
 

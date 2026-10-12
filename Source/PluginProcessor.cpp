@@ -21,6 +21,7 @@ NebulaAudioProcessor::NebulaAudioProcessor()
 
     state.state.setProperty ("preset", 0, nullptr);
     imitator.onFinished = [this] { triggerAsyncUpdate(); };
+    forgeJob.onFinished = [this] { forgePending = true; triggerAsyncUpdate(); };
 }
 
 //==============================================================================
@@ -502,7 +503,11 @@ void NebulaAudioProcessor::setUserTableFromDrawing (const std::vector<float>& po
     tables.hasCustomUser = true;
 }
 
-void NebulaAudioProcessor::handleAsyncUpdate() { applyImitationResult(); }
+void NebulaAudioProcessor::handleAsyncUpdate()
+{
+    applyImitationResult();
+    if (forgePending.exchange (false)) collectForgeResult();
+}
 
 void NebulaAudioProcessor::applyImitationResult()
 {
@@ -987,4 +992,104 @@ bool NebulaAudioProcessor::recallDnaSlot (int slot)
 bool NebulaAudioProcessor::hasDnaSlot (int slot) const
 {
     return state.state[slot == 0 ? "dnaSlotA" : "dnaSlotB"].toString().isNotEmpty();
+}
+
+//==============================================================================
+// FORGE
+
+juce::AudioBuffer<float> NebulaAudioProcessor::forgeSection (bool& ok) const
+{
+    ok = false;
+    auto s = sampleSource.get();
+    if (s == nullptr) return {};
+    const int n = s->length();
+    const int a = juce::jlimit (0, juce::jmax (0, n - 2), (int) (regionStart() * (float) n));
+    const int b = juce::jlimit (a + 2, n, (int) (regionEnd() * (float) n));
+    juce::AudioBuffer<float> buf (1, b - a);
+    buf.copyFrom (0, 0, s->data() + a, b - a);
+    ok = true;
+    return buf;
+}
+
+bool NebulaAudioProcessor::startForge (juce::int64 seed, int count)
+{
+    bool ok = false;
+    auto section = forgeSection (ok);
+    if (! ok) return false;
+    Forge::SearchSettings st;
+    st.seed = seed; st.candidates = juce::jlimit (8, 16, count);
+    forgeJob.start (section, sampleSource.get()->sampleRate, sampleSource.get()->name, st);
+    return true;
+}
+
+bool NebulaAudioProcessor::forgeMutate (int index, juce::int64 seed)
+{
+    bool ok = false;
+    auto section = forgeSection (ok);
+    const auto list = forgeCandidates();
+    if (! ok || index < 0 || index >= (int) list.size()) return false;
+    Forge::SearchSettings st;
+    st.seed = seed; st.candidates = 8;
+    forgeJob.start (section, sampleSource.get()->sampleRate, sampleSource.get()->name, st, list[(size_t) index]);
+    return true;
+}
+
+void NebulaAudioProcessor::collectForgeResult()
+{
+    if (! forgeJob.finished.exchange (false)) return;
+    auto r = forgeJob.result();
+    if (r.cancelled && r.candidates.empty()) return;
+    const juce::ScopedLock sl (forgeLock);
+    if (! forgeList.empty()) forgeHistory.push_back (forgeList);   // se conserva la generación anterior
+    forgeList = std::move (r.candidates);
+    forgeFeatures = std::move (r.features);
+    ++forgeRuns;
+}
+
+void NebulaAudioProcessor::auditionForgeCandidate (int index)
+{
+    const auto list = forgeCandidates();
+    if (index < 0 || index >= (int) list.size()) return;
+    const auto ref = forgeReference();
+    Forge::PatchRenderer r;
+    const double sr = currentSampleRate > 0 ? currentSampleRate : 48000.0;
+    const double len = juce::jlimit (0.5, 6.0, ref.lengthS > 0 ? ref.lengthS : 2.0);
+    auto audio = r.render (list[(size_t) index].patch, ref.note, ref.releaseStartS > 0 ? ref.releaseStartS : len, len + 0.3, sr);
+    juce::AudioBuffer<float> mono (1, audio.getNumSamples());
+    mono.copyFrom (0, 0, audio, 0, 0, audio.getNumSamples());
+    startPreview (SampleTools::fromBuffer (mono, sr, list[(size_t) index].id));
+}
+
+void NebulaAudioProcessor::auditionForgeReference()
+{
+    const auto ref = forgeReference();
+    if (ref.tuned.getNumSamples() == 0) return;
+    juce::AudioBuffer<float> mono (1, ref.tuned.getNumSamples());
+    mono.copyFrom (0, 0, ref.tuned, 0, 0, ref.tuned.getNumSamples());
+    startPreview (SampleTools::fromBuffer (mono, ref.sampleRate, "referencia"));
+}
+
+void NebulaAudioProcessor::applySynthPatch (const Forge::SynthPatch& p)
+{
+    auto set = [this] (const juce::String& id, float v) { if (auto* prm = state.getParameter (id)) prm->setValueNotifyingHost (prm->convertTo0to1 (v)); };
+    for (auto& info : Forge::synthParams()) set (info.id, p.get (info.id));
+    // lo que no es receta queda neutro: motor Synth, sin efectos ni macros ni Cosmos/Abismo
+    set (ParamID::engine, (float) Engine::Synth);
+    set (ParamID::transform, 0.0f);
+    for (auto* id : { ParamID::fxEqOn, ParamID::fxCompOn, ParamID::fxChorusOn, ParamID::fxDelayOn, ParamID::fxRevOn }) set (id, 0.0f);
+    set (ParamID::fxWidth, 1.0f);
+    for (auto* id : { ParamID::macroBright, ParamID::macroBody, ParamID::macroMove, ParamID::macroSpace, ParamID::macroChaos }) set (id, 0.0f);
+    state.state.setProperty ("forgePatch", p.toXmlString(), nullptr);
+    state.state.setProperty ("preset", -1, nullptr);
+    markReference();
+}
+
+Forge::SynthPatch NebulaAudioProcessor::currentSynthPatch() const
+{
+    auto p = Forge::SynthPatch::init();
+    const auto stored = state.state["forgePatch"].toString();
+    if (stored.isNotEmpty()) { auto meta = Forge::SynthPatch::fromXmlString (stored); p.name = meta.name; p.origin = meta.origin; p.reference = meta.reference; p.architecture = meta.architecture; p.seed = meta.seed; }
+    for (auto& info : Forge::synthParams())
+        if (auto* v = state.getRawParameterValue (info.id)) p.values[info.id] = v->load();
+    return p;
 }
