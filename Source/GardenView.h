@@ -71,7 +71,7 @@ public:
     void loadFile (const juce::File&);
     void chooseFile();
     void setDragHover (bool h)          { dragHover = h; repaint(); }
-    std::function<void()> onSoundChanged, onOpenEditor, onOpenCleaner, onOpenRecipe, onOpenDna;
+    std::function<void()> onSoundChanged, onOpenEditor, onOpenCleaner, onOpenRecipe, onOpenDna, onOpenForge;
     std::function<int()> framesForWave;
 
 private:
@@ -85,7 +85,8 @@ private:
                cleanButton   { "Limpiar", Icons::broom(), "Rescata solo la parte que quieres (nota, golpes, sin ruido...)" },
                recipeButton  { "Receta", Icons::recipe(), "La receta: que es el sonido y como lo reconstruyo Nebula" },
                cancelButton  { "Cancelar", Icons::stop(), "Detener" },
-               dnaButton     { "ADN", Icons::dna(), "Editor de ADN: genes del sonido recreado, mutaciones con semilla y A/B" };
+               dnaButton     { "ADN", Icons::dna(), "Editor de ADN: genes del sonido recreado, mutaciones con semilla y A/B" },
+               forgeButton   { "FORGE", Icons::sparkle(), "Sintesis inversa: recetas del motor Synth para este sample (suenan sin el sample)" };
     TransformStrip transformStrip;
     juce::Rectangle<int> transformArea;
     std::unique_ptr<juce::FileChooser> chooser;
@@ -112,7 +113,7 @@ public:
     void filesDropped (const juce::StringArray& files, int, int) override;
     void paintOverChildren (juce::Graphics&) override;
 
-    std::function<void()> onOpenSampleEditor, onOpenCleaner, onOpenRecipe, onOpenDna;
+    std::function<void()> onOpenSampleEditor, onOpenCleaner, onOpenRecipe, onOpenDna, onOpenForge;
     std::function<int()> framesForWave;
 
 private:

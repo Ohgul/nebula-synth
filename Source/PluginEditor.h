@@ -8,6 +8,7 @@
 #include "Panels.h"
 #include "NeuralUI.h"
 #include "DnaPanel.h"
+#include "ForgePanel.h"
 
 // Contenido de la ventana (tamaño de diseño fijo; se escala con el zoom)
 class NebulaContent : public juce::Component, private juce::Timer
@@ -56,6 +57,7 @@ private:
     RecipePanel recipePanel;
     CleanerPanel cleanerPanel;
     DnaPanel dnaPanel;
+    ForgePanel forgePanel;
     juce::MidiKeyboardComponent keyboard;
 
     int currentTab = 0;

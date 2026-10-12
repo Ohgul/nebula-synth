@@ -139,6 +139,21 @@ int NEBULA_TEST_ENTRY (int argc, char** argv)
         save (shot (1.0f), "ui_abismo.png");
         { auto* p = proc->state.getParameter (ParamID::transform); p->setValueNotifyingHost (p->convertTo0to1 (0.0f)); }
         pump (200);
+        // FORGE: buscar recetas, ver la lista y usar la mejor
+        click ("FORGE");
+        pump (200);
+        click ("Buscar recetas");
+        for (int k = 0; k < 900 && proc->isForging(); ++k) pump (100);
+        pump (500);
+        save (shot (1.0f), "ui_forge.png");
+        if (proc->forgeCandidates().size() < 8) { std::printf ("FALLO: FORGE desde la interfaz no entrego 8 candidatos\n"); ++uiFailures; }
+        click ("Usar");
+        pump (200);
+        if (juce::roundToInt (proc->state.getRawParameterValue (ParamID::engine)->load()) != Engine::Synth) { std::printf ("FALLO: Usar no paso al motor Synth\n"); ++uiFailures; }
+        click ("Cerrar");
+        pump (100);
+        click ("RECREAR");
+        pump (1300);
         click ("Receta");
         pump (300);
         save (shot (1.0f), "ui_receta.png");

@@ -442,6 +442,10 @@ SamplePanel::SamplePanel (NebulaAudioProcessor& p) : processor (p), region (p, f
     dnaButton.colour = accent2;
     dnaButton.onClick = [this] { if (onOpenDna) onOpenDna(); };
     addAndMakeVisible (dnaButton);
+    forgeButton.horizontal = true;
+    forgeButton.colour = accent;
+    forgeButton.onClick = [this] { if (onOpenForge) onOpenForge(); };
+    addAndMakeVisible (forgeButton);
     addAndMakeVisible (region);
     region.onClick = [this] { if (processor.sampleSource.get() == nullptr) chooseFile(); else if (onOpenEditor) onOpenEditor(); };
     region.setInterceptsMouseClicks (true, false);
@@ -496,6 +500,7 @@ void SamplePanel::update()
     const bool imitating = processor.isImitating();
     const bool has = shown != nullptr;
     for (auto* b : { &recreateButton, &editButton, &cleanButton }) b->setEnabled (has && ! imitating);
+    forgeButton.setEnabled (has);
     recipeButton.setVisible (recreated || processor.recipeOrigin != NebulaAudioProcessor::RecipeOrigin::None);
     dnaButton.setEnabled (processor.resynthModel() != nullptr);
     cancelButton.setVisible (imitating);
@@ -620,8 +625,12 @@ void SamplePanel::resized()
     region.setBounds (dropArea());
     loadButton.setBounds (getWidth() - 26, 110, 26, 22);
     recreateButton.setBounds (0, 154, getWidth(), 48);
-    recipeButton.setBounds (0, 268, getWidth() / 2 - 3, 28);
-    dnaButton.setBounds (getWidth() / 2 + 3, 268, getWidth() - getWidth() / 2 - 3, 28);
+    {
+        const int w3 = (getWidth() - 8) / 3;
+        recipeButton.setBounds (0, 268, w3, 28);
+        dnaButton.setBounds (w3 + 4, 268, w3, 28);
+        forgeButton.setBounds (2 * w3 + 8, 268, getWidth() - 2 * w3 - 8, 28);
+    }
     cancelButton.setBounds (0, 212, 110, 26);
     // Lo secundario, chiquito y abajo
     const int y = getHeight() - 30;
@@ -643,6 +652,7 @@ GardenView::GardenView (NebulaAudioProcessor& p) : processor (p), garden (p.gard
     samplePanel.onOpenCleaner = [this] { if (onOpenCleaner) onOpenCleaner(); };
     samplePanel.onOpenRecipe = [this] { if (onOpenRecipe) onOpenRecipe(); };
     samplePanel.onOpenDna = [this] { if (onOpenDna) onOpenDna(); };
+    samplePanel.onOpenForge = [this] { if (onOpenForge) onOpenForge(); };
 
     mutationSlider.setSliderStyle (juce::Slider::LinearHorizontal);
     mutationSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 44, 20);

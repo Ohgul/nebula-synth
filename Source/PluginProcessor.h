@@ -14,6 +14,7 @@
 #include "Exporter.h"
 #include "Dna.h"
 #include "Similarity.h"
+#include "Forge/ForgeJob.h"
 
 class NebulaAudioProcessor : public juce::AudioProcessor,
                              private juce::AsyncUpdater,
@@ -21,7 +22,7 @@ class NebulaAudioProcessor : public juce::AudioProcessor,
 {
 public:
     NebulaAudioProcessor();
-    ~NebulaAudioProcessor() override { stopTimer(); imitator.stop(); cleaner.cancel(); cancelPendingUpdate(); }
+    ~NebulaAudioProcessor() override { stopTimer(); forgeJob.stop(); imitator.stop(); cleaner.cancel(); cancelPendingUpdate(); }
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
@@ -161,6 +162,22 @@ public:
     bool isPreviewing() const { return previewing.load(); }
     float previewProgress() const { return previewProgressValue.load(); }
 
+    // ---- FORGE: síntesis inversa (recetas del motor Synth que no dependen del sample) ----
+    bool startForge (juce::int64 seed, int count = 8);          // analiza la sección del sample y busca
+    bool forgeMutate (int candidateIndex, juce::int64 seed);    // nueva generación: descendientes de un candidato
+    void cancelForge()                  { forgeJob.cancel(); }
+    bool isForging() const              { return forgeJob.isRunning(); }
+    float forgeProgress() const         { return forgeJob.currentProgress(); }
+    void collectForgeResult();                                   // al terminar (también usable en pruebas)
+    std::vector<Forge::PatchCandidate> forgeCandidates() const  { const juce::ScopedLock sl (forgeLock); return forgeList; }
+    Forge::ReferenceFeatures forgeReference() const             { const juce::ScopedLock sl (forgeLock); return forgeFeatures; }
+    std::vector<std::vector<Forge::PatchCandidate>> forgeGenerations() const { const juce::ScopedLock sl (forgeLock); return forgeHistory; }
+    void auditionForgeCandidate (int index);                    // escuchar sin cambiar el sonido
+    void auditionForgeReference();                              // la referencia, afinada a su tecla
+    void applySynthPatch (const Forge::SynthPatch&);            // el patch pasa a ser el sonido (motor Synth)
+    Forge::SynthPatch currentSynthPatch() const;                // la receta que suena ahora
+    std::atomic<int> forgeRuns { 0 };
+
     void applyImitationResult();         // se llama solo al terminar (también usable en pruebas)
     std::atomic<float> lastSimilarity { -1.0f };
     std::atomic<int> imitationCount { 0 };
@@ -197,6 +214,13 @@ private:
     std::unique_ptr<juce::dsp::Oversampling<float>> os2, os4;
     int currentFactor = 1, maxBlock = 512;
     float dcX[2] {}, dcY[2] {};
+    Forge::Job forgeJob;
+    juce::CriticalSection forgeLock;
+    std::vector<Forge::PatchCandidate> forgeList;
+    std::vector<std::vector<Forge::PatchCandidate>> forgeHistory;   // generaciones anteriores
+    Forge::ReferenceFeatures forgeFeatures;
+    juce::AudioBuffer<float> forgeSection (bool& ok) const;
+    std::atomic<bool> forgePending { false };
 public:
     std::atomic<int> nonFiniteBlocks { 0 };   // bloques silenciados por valores no finitos (para pruebas y diagnóstico)
 private:
