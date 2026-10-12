@@ -60,8 +60,12 @@ public:
     void reset (juce::int64 seed)
     {
         rng.setSeed (seed);
-        for (auto& ch : ap) for (auto& a : ch) { std::fill (a.buf.begin(), a.buf.end(), 0.0f); a.pos = 0; }
-        std::fill (frag.begin(), frag.end(), std::array<float, 2> {});
+        if (dirty)   // los búferes sólo se limpian si se usaron (al empezar cada nota, en el hilo de audio)
+        {
+            for (auto& ch : ap) for (auto& a : ch) { std::fill (a.buf.begin(), a.buf.end(), 0.0f); a.pos = 0; }
+            std::fill (frag.begin(), frag.end(), std::array<float, 2> {});
+            dirty = false;
+        }
         fragW = 0; fragMode = false; fragLeft = (int) (0.05 * sr); fragRead = 0.0; fragLen = 1; fragDir = 1; fragFadeIn = 0;
         lfo = { rng.nextDouble(), rng.nextDouble(), rng.nextDouble(), rng.nextDouble() };
         chaosTarget = chaosNow = 0.0f; chaosTimer = 0.0f;
@@ -110,6 +114,7 @@ public:
     void process (float& L, float& R)
     {
         if (! active) return;
+        dirty = true;
         const float dryL = L, dryR = R;
         const float c = amt.cosmos, a = amt.abyss;
         float l = L, r = R;
@@ -288,7 +293,7 @@ private:
     double sr = 44100.0, noteHz = 220.0, ringPhase = 0.0, fragRead = 0.0;
     juce::Random rng;
     Transform::Amounts amt;
-    bool active = false;
+    bool active = false, dirty = true;
     std::array<double, 4> lfo {};
     std::array<std::array<Allpass, numAp>, 2> ap;
     std::vector<std::array<float, 2>> frag;

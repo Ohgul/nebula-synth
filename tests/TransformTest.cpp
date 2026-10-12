@@ -299,6 +299,20 @@ int NEBULA_TEST_ENTRY (int, char**)
         check ("Limitador: nunca pasa de 1.0 (con +6 dB y entrada x4)", peak <= 1.0f, "pico " + juce::String (peak, 3));
     }
 
+    // ---- 7. CPU (informativo): acorde de 8 notas del pad recreado, 4 s ----
+    {
+        auto p = makeProc (&padAudio, "pad");
+        auto cost = [&] (float t)
+        {
+            setP (*p, transform, t);
+            const auto t0 = juce::Time::getMillisecondCounterHiRes();
+            play (*p, { 48, 52, 55, 59, 60, 64, 67, 71 }, 3.5, 4.0);
+            return (juce::Time::getMillisecondCounterHiRes() - t0) / 4000.0 * 100.0;   // % de un núcleo
+        };
+        const double c0 = cost (0.0f), cc = cost (1.0f), ca = cost (-1.0f);
+        std::printf ("CPU 8 voces de resintesis (informativo): original %.1f %%, Cosmos %.1f %%, Abismo %.1f %% de un nucleo\n", c0, cc, ca);
+    }
+
     std::printf (failures == 0 ? "TODO OK\n" : "%d FALLOS\n", failures);
     return failures == 0 ? 0 : 1;
 }

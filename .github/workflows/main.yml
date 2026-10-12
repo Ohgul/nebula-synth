@@ -53,6 +53,8 @@ jobs:
               fallos=$((fallos+1))
               echo "::error title=$name::la prueba termino con codigo $rc"
               grep -E "FALLO" "test-output/$name.log" | head -20 | while IFS= read -r l; do echo "::error title=$name::$l"; done
+            else
+              echo "::notice title=$name::$(tail -1 "test-output/$name.log")"
             fi
           }
           set +e
@@ -64,11 +66,15 @@ jobs:
           run Dna
           run Transform
           run Render test-output/render
+          run V21 test-output/v21
+          run V2 test-output/v2
           if [ "$fallos" -gt 0 ]; then echo "::error::$fallos pruebas fallaron"; exit 1; fi
 
       - name: Compatibilidad con proyectos v3 (informativa en Mac)
         continue-on-error: true
-        run: ./build/NebulaTests_artefacts/Release/NebulaTests Bench test-output/bench --only 0,8 --fixtures tests/fixtures/v3
+        run: |
+          ./build/NebulaTests_artefacts/Release/NebulaTests Bench test-output/bench --only 0,8 --fixtures tests/fixtures/v3 2>&1 | tee bench.log
+          grep "Compatibilidad" bench.log | while IFS= read -r l; do echo "::notice title=Compatibilidad::$l"; done
 
       - name: Subir resultados de pruebas
         if: always()
@@ -93,7 +99,14 @@ jobs:
           cp -R build/NebulaSynth_artefacts/Release/AU/Nebula.component ~/Library/Audio/Plug-Ins/Components/
           killall -9 AudioComponentRegistrar || true
           sleep 2
-          auval -v aumu Nbl1 Rmcd
+          # el resultado queda como anotación (se puede leer por la API aunque los registros no se descarguen)
+          if auval -v aumu Nbl1 Rmcd > auval.log 2>&1 && grep -q "AU VALIDATION SUCCEEDED" auval.log; then
+            echo "::notice title=auval::AU VALIDATION SUCCEEDED"
+          else
+            grep -iE "error|fail" auval.log | head -10 | while IFS= read -r l; do echo "::warning title=auval::$l"; done
+            echo "::warning title=auval::auval no aprobo el AU"
+          fi
+          tail -5 auval.log
 
       - name: Crear instalador .pkg
         run: |
