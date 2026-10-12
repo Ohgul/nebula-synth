@@ -25,6 +25,7 @@ int NEBULA_TEST_ENTRY (int argc, char** argv)
     proc->loadPreset (1);
 
     std::unique_ptr<juce::AudioProcessorEditor> ed (proc->createEditor());
+    int uiFailures = 0;
     ed->setVisible (true);   // necesario para que los temporizadores y las capturas funcionen igual que en el DAW
 
     std::function<void (juce::Component*, std::function<void (juce::Component*)>)> walk =
@@ -156,6 +157,16 @@ int NEBULA_TEST_ENTRY (int argc, char** argv)
         click ("Editar");
         pump (300);
         save (shot (1.0f), "ui_editar_resintesis.png");
+        // Editor de ADN: abrir, mutar (semilla fija) y ver el resultado
+        click ("Editar ADN");
+        pump (300);
+        save (shot (1.0f), "ui_adn.png");
+        click ("Mutar");
+        pump (400);
+        save (shot (1.0f), "ui_adn_mutado.png");
+        if (proc->resynthModel() == proc->baseResynthModel()) { std::printf ("FALLO: mutar desde la interfaz no cambio el modelo\n"); ++uiFailures; }
+        click ("Cerrar");
+        pump (100);
         click ("Cerebro");
         pump (100);
         { auto* p = proc->state.getParameter (ParamID::engine); p->setValueNotifyingHost (p->convertTo0to1 (1.0f)); }
@@ -231,6 +242,7 @@ int NEBULA_TEST_ENTRY (int argc, char** argv)
 
     ed.reset();
     proc.reset();
+    if (uiFailures > 0) { std::printf ("UI: %d FALLOS\n", uiFailures); return 1; }
     std::printf ("UI OK\n");
     return 0;
 }

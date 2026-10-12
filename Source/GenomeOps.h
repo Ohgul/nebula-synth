@@ -84,6 +84,8 @@ public:
             if (engine != Engine::Resynth && id.startsWith ("rs")) continue;
             // Decisiones del usuario: encendidos, macros, efectos y la curva de tono no mutan
             if (id.endsWith ("On") || id.startsWith ("macro") || id.startsWith ("fx") || id == ParamID::rsPitch) continue;
+            // El ADN y Cosmos/Abismo tienen su propia mutación (con semilla y candados)
+            if (id.startsWith ("dna") || id == ParamID::transform || id == ParamID::identity) continue;
 
             auto chance = [&] (float x) { return rng.nextFloat() < amt * x; };
             auto setIdx = [&] (float realValue) { v = p->convertTo0to1 (realValue); };

@@ -215,9 +215,11 @@ public:
     void start (std::shared_ptr<const ResynthModel> m, juce::Random& r)
     {
         model = std::move (m);
+        prevModel = nullptr; xfade = 0.0f;
         t = 0.0;
         trPos = 0.0;
         dir = 1.0; released = false;
+        phase2 = 0.37; phase3 = 0.71; roughPhase = 0.0;
         phase = 0.0;
         for (auto& p : ph) p = { 1.0, 0.0 };
         for (size_t k = 0; k < ph.size(); ++k)
@@ -237,6 +239,32 @@ public:
     // Cola real (modelos con sostenido): la voz deja de usar su envolvente de suelta y espera a que termine
     bool hasRealTail() const { return hasModel() && model->hasLoop(); }
     void release() { released = true; }
+
+    // ADN en tiempo real (lo pone la voz en cada bloque)
+    struct Genes { float pitchDepth = 1.0f, attack = 1.0f, release = 1.0f, transient = 1.0f, noiseTilt = 0.0f, rough = 0.0f, density = 0.0f; bool freeze = false; };
+    void setGenes (const Genes& g) { genes = g; }
+
+    // Cambia a una variante del mismo modelo (mismo número de cuadros) sin cortar la nota: así los genes
+    // estructurales del ADN también se oyen en notas que ya están sonando y se pueden automatizar.
+    void swapModel (std::shared_ptr<const ResynthModel> m)
+    {
+        if (m != nullptr && model != nullptr && m != model && m->frames() == model->frames()
+            && m->partials.size() == model->partials.size() && m->transient.size() == model->transient.size())
+        {
+            // la tabla nueva entra con un fundido de 30 ms (cambiar de forma de onda de golpe hace clic)
+            // la ganancia en curso lleva el nivel de la tabla anterior: se pasa a la escala de la nueva
+            if (model->harmonicLevel > 1.0e-9f)
+            {
+                const float k = m->harmonicLevel / model->harmonicLevel;
+                harmGain *= k; harmTarget *= k; harmStep *= k;
+            }
+            prevModel = model;
+            model = std::move (m);
+            xfade = 1.0f;
+            xfadeStep = (float) (1.0 / (0.03 * sr));
+        }
+    }
+    const ResynthModel* current() const { return model.get(); }
     // termina 30 ms después del último cuadro, con un fundido (antes se cortaba de golpe y hacía clic)
     bool finished() const { return hasRealTail() && released && t >= (double) model->times.back() + tailFadeS; }
 
@@ -259,7 +287,7 @@ public:
             if (! m.pitchCurve.empty()) cents = ResynthModel::curveAt (m.pitchCurve, m.pitchHop, tt);
             else if (! m.pitchCents.empty()) cents = lerp (m.pitchCents[(size_t) f0], m.pitchCents[(size_t) f1]);
         }
-        hz = noteHz * std::exp2 (cents / 1200.0);
+        hz = noteHz * std::exp2 (cents * genes.pitchDepth / 1200.0);
         // el transitorio se transpone con la tecla (sin la curva de tono: es el golpe, no la nota)
         trStep = m.transient.empty() ? 0.0 : (noteHz / (440.0 * std::exp2 ((m.rootNote - 69.0) / 12.0))) * m.transientRate / sr;
         const float env = m.harmEnv.empty() ? 1.0f : ResynthModel::curveAt (m.harmEnv, m.envHop, tt);
@@ -291,13 +319,20 @@ public:
             {
                 const int nf0 = juce::jmin ((int) m.noise.size() - 1, f0), nf1 = juce::jmin ((int) m.noise.size() - 1, f1);
                 target = noiseAmt * lerp (m.noise[(size_t) nf0][(size_t) b], m.noise[(size_t) nf1][(size_t) b]) * bands[(size_t) b].norm;
+                if (genes.noiseTilt != 0.0f)   // color del ruido: ±12 dB de inclinación de graves a agudos
+                    target *= std::pow (10.0f, genes.noiseTilt * 12.0f * ((float) b / (ResynthModel::numBands - 1) - 0.5f) / 20.0f);
             }
             bandStep[(size_t) b] = (target - bandAmp[(size_t) b]) / (float) rampLen;
         }
-        const double adv = speed * samples / sr;
+        double adv = speed * samples / sr;
+        // Ataque y cola del ADN: estiran o comprimen esos tramos del tiempo del modelo
+        const double attackEnd = m.hasLoop() ? (double) m.loopStart : juce::jmin (0.3, 0.25 * (double) m.times.back());
+        if (t < attackEnd) adv /= juce::jmax (0.05f, genes.attack);
+        if (released && m.hasLoop() && t >= m.releaseStart) adv /= juce::jmax (0.05f, genes.release);
         if (m.hasLoop())
         {
-            if (! released)
+            if (! released && genes.freeze && t >= m.loopStart) { /* congelar: el timbre se queda donde empieza el cuerpo */ }
+            else if (! released)
             {
                 // ida y vuelta por el cuerpo: la evolución sigue sin saltos ni congelarse
                 t += dir * adv;
@@ -328,7 +363,7 @@ public:
         if (trStep > 0.0 && trPos < (double) m.transient.size() - 1.0)
         {
             const int i0 = (int) trPos; const float fr = (float) (trPos - i0);
-            trOut = m.transient[(size_t) i0] + (m.transient[(size_t) i0 + 1] - m.transient[(size_t) i0]) * fr;
+            trOut = (m.transient[(size_t) i0] + (m.transient[(size_t) i0 + 1] - m.transient[(size_t) i0]) * fr) * genes.transient;
             if (m.headStart > 0.0f)
             {
                 const double next = trPos + trStep;
@@ -343,9 +378,28 @@ public:
         if (m.harmonic != nullptr && (harmGain > 0.0f || harmTarget > 0.0f))
         {
             harmGain += harmStep;
-            const float v = m.harmonic->read (phase, position, Wavetable::mipFor (hz, sr));
+            const int mip = Wavetable::mipFor (hz, sr);
+            float v = m.harmonic->read (phase, position, mip);
+            if (xfade > 0.0f)
+            {
+                if (prevModel != nullptr && prevModel->harmonic != nullptr && m.harmonicLevel > 1.0e-9f)
+                {
+                    const float pv = prevModel->harmonic->read (phase, position, mip) * (prevModel->harmonicLevel / m.harmonicLevel);
+                    v += (pv - v) * xfade;
+                }
+                xfade -= xfadeStep;
+            }
             phase += hz / sr;
             if (phase >= 1.0) phase -= std::floor (phase);
+            if (genes.density > 0.001f)
+            {
+                // Densidad: dos copias desafinadas (±0.6 % · densidad) que leen la misma tabla
+                const float d = genes.density;
+                v += 0.7f * d * (m.harmonic->read (phase2, position, mip) + m.harmonic->read (phase3, position, mip));
+                v /= std::sqrt (1.0f + 2.0f * 0.49f * d * d);
+                phase2 += hz * (1.0 + 0.006 * d) / sr; if (phase2 >= 1.0) phase2 -= std::floor (phase2);
+                phase3 += hz * (1.0 - 0.006 * d) / sr; if (phase3 >= 1.0) phase3 -= std::floor (phase3);
+            }
             centre += v * harmGain;
         }
 
@@ -388,9 +442,16 @@ public:
         // El ancho que llega puede pasar de 1 (ancho del modelo × 2 × "Resintesis Ancho"); el retardo
         // Haas se satura en su máximo (20 ms) para no leer fuera del búfer. Con ancho <= 1 no cambia nada.
         const int delay = juce::jlimit (1, hl - 2, (int) (juce::jmin (1.0f, width) * (float) (hl - 2)));
-        const float nzR = haas[(size_t) ((haasPos - delay + hl) % hl)];
+        float nzR = haas[(size_t) ((haasPos - delay + hl) % hl)];
         haasPos = (haasPos + 1) % hl;
 
+        if (genes.rough > 0.001f)
+        {
+            // Aspereza: modulación de amplitud rápida (≈ 37 Hz, levemente irregular)
+            roughPhase += (37.0 + 9.0 * std::sin (roughPhase * 0.173)) / sr;
+            const float am = 1.0f - genes.rough * 0.5f * (1.0f + (float) std::sin (juce::MathConstants<double>::twoPi * roughPhase));
+            centre *= am; pl *= am; pr *= am; nz *= am; nzR *= am;
+        }
         if (released && m.hasLoop() && t > (double) m.times.back())
             modelGain *= (float) juce::jmax (0.0, 1.0 - (t - (double) m.times.back()) / tailFadeS);
         float l = (centre + pl + nz) * modelGain + trOut, r = (centre + pr + (width > 0.01f ? nzR : nz)) * modelGain + trOut;
@@ -409,8 +470,10 @@ public:
 private:
     struct Band { double g = 0.1, k = 1.0, s1 = 0.0, s2 = 0.0; float norm = 1.0f; };
 
-    std::shared_ptr<const ResynthModel> model;
-    double sr = 44100.0, t = 0.0, phase = 0.0, hz = 220.0, trPos = 0.0, trStep = 0.0, dir = 1.0;
+    std::shared_ptr<const ResynthModel> model, prevModel;   // prevModel: la variante anterior durante el fundido
+    float xfade = 0.0f, xfadeStep = 0.0f;
+    double sr = 44100.0, t = 0.0, phase = 0.0, hz = 220.0, trPos = 0.0, trStep = 0.0, dir = 1.0, phase2 = 0.37, phase3 = 0.71, roughPhase = 0.0;
+    Genes genes;
     bool released = false;
     static constexpr double tailFadeS = 0.03;
     float frame = 0.0f, position = 0.0f, harmGain = 0.0f, harmTarget = 0.0f, harmStep = 0.0f, tiltState = 0.0f;

@@ -5,7 +5,7 @@ using namespace NebulaColours;
 
 //==============================================================================
 NebulaContent::NebulaContent (NebulaAudioProcessor& p)
-    : proc (p), garden (p), edit (p), mod (p), fxView (p), macros (p), browser (p), sampleEditor (p), drawPanel (p), recipePanel (p), cleanerPanel (p),
+    : proc (p), garden (p), edit (p), mod (p), fxView (p), macros (p), browser (p), sampleEditor (p), drawPanel (p), recipePanel (p), cleanerPanel (p), dnaPanel (p),
       keyboard (p.keyboardState, juce::MidiKeyboardComponent::horizontalKeyboard)
 {
     const char* names[] { "Cerebro", "Editar", "Modulacion", "Efectos" };
@@ -55,6 +55,7 @@ NebulaContent::NebulaContent (NebulaAudioProcessor& p)
     addChildComponent (drawPanel);
     addChildComponent (recipePanel);
     addChildComponent (cleanerPanel);
+    addChildComponent (dnaPanel);
 
     garden.onOpenSampleEditor = [this] { sampleEditor.open(); };
     garden.framesForWave = [this] { return sampleEditor.framesChoice(); };
@@ -63,6 +64,7 @@ NebulaContent::NebulaContent (NebulaAudioProcessor& p)
     garden.onOpenCleaner = [this] { cleanerPanel.open(); };
     garden.onOpenRecipe  = [this] { recipePanel.open(); };
     edit.onOpenCleaner   = [this] { cleanerPanel.open(); };
+    edit.onOpenDna       = [this] { dnaPanel.open(); };
 
     keyboard.setAvailableRange (24, 108);
     keyboard.setColour (juce::MidiKeyboardComponent::keyDownOverlayColourId, accent.withAlpha (0.7f));
@@ -240,6 +242,7 @@ void NebulaContent::resized()
     drawPanel.setBounds (r.reduced (120, 50));
     recipePanel.setBounds (r.reduced (150, 0).withTrimmedBottom (-60));
     cleanerPanel.setBounds (r.reduced (24, 0).withTrimmedBottom (-40));
+    dnaPanel.setBounds (r.reduced (16, 0).withTrimmedBottom (-60));
     browser.setBounds (r.reduced (200, 10));
 }
 

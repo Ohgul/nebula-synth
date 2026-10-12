@@ -192,6 +192,25 @@ namespace Icons
         Path p; p.startNewSubPath (0.35f, 0.25f); p.lineTo (0.12f, 0.45f); p.lineTo (0.35f, 0.65f);
         p.startNewSubPath (0.12f, 0.45f); p.lineTo (0.62f, 0.45f); p.quadraticTo (0.88f, 0.45f, 0.88f, 0.68f); p.quadraticTo (0.88f, 0.86f, 0.62f, 0.86f); return p;
     }
+    inline Path dna()
+    {
+        // doble hélice: dos hebras senoidales cruzadas y los peldaños
+        Path p;
+        for (int strand = 0; strand < 2; ++strand)
+            for (int i = 0; i <= 32; ++i)
+            {
+                const float y = 0.1f + 0.8f * (float) i / 32.0f;
+                const float x = 0.5f + 0.28f * std::sin ((float) i / 32.0f * juce::MathConstants<float>::twoPi * 1.25f + (float) strand * juce::MathConstants<float>::pi);
+                if (i == 0) p.startNewSubPath (x, y); else p.lineTo (x, y);
+            }
+        for (int i = 1; i < 8; i += 2)
+        {
+            const float y = 0.1f + 0.8f * (float) i / 8.0f;
+            const float dx = 0.28f * std::sin ((float) i / 8.0f * juce::MathConstants<float>::twoPi * 1.25f);
+            p.startNewSubPath (0.5f - dx * 0.8f, y); p.lineTo (0.5f + dx * 0.8f, y);
+        }
+        return p;
+    }
     inline Path lock()
     {
         Path p; p.addRoundedRectangle (0.2f, 0.45f, 0.6f, 0.45f, 0.08f);

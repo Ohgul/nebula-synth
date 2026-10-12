@@ -42,11 +42,27 @@ jobs:
         run: |
           T=./build/NebulaTests_artefacts/Release/NebulaTests
           mkdir -p test-output
-          $T Ui test-output/ui
-          $T Stereo
-          $T Determinism tests/fixtures/v3
-          $T V3 test-output/v3
-          $T Midi
+          fallos=0
+          run() {
+            # cada prueba deja su salida en test-output; las líneas FALLO se publican como anotaciones
+            local name="$1"; shift
+            "$T" "$name" "$@" > "test-output/$name.log" 2>&1
+            local rc=$?
+            cat "test-output/$name.log"
+            if [ $rc -ne 0 ]; then
+              fallos=$((fallos+1))
+              echo "::error title=$name::la prueba termino con codigo $rc"
+              grep -E "FALLO" "test-output/$name.log" | head -20 | while IFS= read -r l; do echo "::error title=$name::$l"; done
+            fi
+          }
+          set +e
+          run Ui test-output/ui
+          run Stereo
+          run Determinism tests/fixtures/v3
+          run V3 test-output/v3
+          run Midi
+          run Dna
+          if [ "$fallos" -gt 0 ]; then echo "::error::$fallos pruebas fallaron"; exit 1; fi
 
       - name: Compatibilidad con proyectos v3 (informativa en Mac)
         continue-on-error: true

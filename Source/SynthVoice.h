@@ -5,6 +5,7 @@
 #include "Wavetable.h"
 #include "DspParts.h"
 #include "ResynthModel.h"
+#include "Dna.h"
 
 struct SynthSound : public juce::SynthesiserSound
 {
@@ -320,6 +321,17 @@ private:
         engine = params.i (P::engine);
         sampler = engine == Engine::Sample && sample != nullptr && sample->length() > 4;
         resynth = engine == Engine::Resynth && rsPlayer.hasModel();
+        if (resynth)
+        {
+            // ADN: genes en tiempo real y, si cambió la variante del modelo (genes estructurales), cambiarla en vivo
+            const auto d = Dna::readRealtime (params);
+            ResynthPlayer::Genes g;
+            g.pitchDepth = d.pitchDepth; g.attack = d.attack; g.release = d.release; g.transient = d.transient;
+            g.noiseTilt = d.noiseTilt; g.rough = d.rough; g.density = d.density; g.freeze = d.freeze;
+            rsPlayer.setGenes (g);
+            auto latest = ctx.models.get();
+            if (latest.get() != rsPlayer.current()) rsPlayer.swapModel (std::move (latest));
+        }
         osc1On = params[P::osc1On] > 0.5f; osc2On = params[P::osc2On] > 0.5f;
         subOn = params[P::subOn] > 0.5f;   noiseOn = params[P::noiseOn] > 0.5f;
         f1On = params[P::f1On] > 0.5f;

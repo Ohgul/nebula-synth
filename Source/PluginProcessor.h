@@ -12,13 +12,15 @@
 #include "ResynthBuilder.h"
 #include "FxChain.h"
 #include "Exporter.h"
+#include "Dna.h"
 
 class NebulaAudioProcessor : public juce::AudioProcessor,
-                             private juce::AsyncUpdater
+                             private juce::AsyncUpdater,
+                             private juce::Timer
 {
 public:
     NebulaAudioProcessor();
-    ~NebulaAudioProcessor() override { imitator.stop(); cleaner.cancel(); cancelPendingUpdate(); }
+    ~NebulaAudioProcessor() override { stopTimer(); imitator.stop(); cleaner.cancel(); cancelPendingUpdate(); }
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
@@ -76,6 +78,23 @@ public:
 
     // ---- v3: resíntesis, A/B, locura ----
     std::shared_ptr<const ResynthModel> resynthModel() const { return voiceCtx.models.get(); }
+
+    // ---- ADN ----
+    // El modelo base (lo que sale de RECREAR o del proyecto) no se modifica; los genes estructurales generan una
+    // variante. applyDna() la reconstruye ya (un temporizador lo hace solo al mover los genes).
+    std::shared_ptr<const ResynthModel> baseResynthModel() const { return std::atomic_load (&baseModel); }
+    void applyDna();
+    // Mutación reproducible: misma semilla + mismo ADN = mismo resultado. Los genes con candado no cambian.
+    void mutateDna (float amount, juce::int64 seed);
+    juce::int64 nextDnaSeed();                       // semilla siguiente (se guarda con el proyecto)
+    bool isGeneLocked (const juce::String& id) const;
+    void setGeneLocked (const juce::String& id, bool locked);
+    void resetGene (const juce::String& id);
+    juce::String dnaToJson() const;                  // copiar
+    bool dnaFromJson (const juce::String& json);     // pegar
+    void storeDnaSlot (int slot);                    // A/B: guarda el ADN actual en la ranura 0 (A) o 1 (B)
+    bool recallDnaSlot (int slot);                   // A/B: carga la ranura
+    bool hasDnaSlot (int slot) const;
     void setAB (bool original) { voiceCtx.abOriginal = original; }
     bool isAB() const { return voiceCtx.abOriginal.load(); }
     float computeCraziness();
@@ -151,6 +170,10 @@ public:
 
 private:
     void handleAsyncUpdate() override;
+    void timerCallback() override;
+    void setBaseModel (std::shared_ptr<const ResynthModel> m);
+    std::shared_ptr<const ResynthModel> baseModel;
+    Dna::Structural appliedDna;
 
     static constexpr int numVoices = 16;
 

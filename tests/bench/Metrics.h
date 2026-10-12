@@ -119,7 +119,7 @@ inline double integratedLufs (const juce::AudioBuffer<float>& b, double sr)
     if (z.empty())   // sonido más corto que un bloque: usa todo
     {
         double acc = 0; for (auto v : p) acc += v;
-        z.push_back (acc / juce::jmax<size_t> (1, p.size()));
+        z.push_back (acc / (double) std::max<size_t> (1, p.size()));
     }
     auto lufs = [] (double ms) { return -0.691 + db (ms); };
     double sum = 0; int cnt = 0;

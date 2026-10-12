@@ -98,13 +98,16 @@ EditView::EditView (NebulaAudioProcessor& p)
     for (auto* c : std::initializer_list<juce::Component*> { &engine, &wave1, &wave2, &preview1, &preview2, &table1, &table2, &draw1, &audio1, &audio2,
                                                              &regionMini, &editRegion, &reverse, &loop, &playMode, &beats,
                                                              &grainType, &cleanButton, &filterGraph, &f1Type, &f1Slope, &f1Char, &f2Type, &f2Slope, &f2Char, &routing, &f2On,
-                                                             &ampGraph, &polyMode, &rsPitch, &rsRecreate,
+                                                             &ampGraph, &polyMode, &rsPitch, &rsRecreate, &rsDna,
                                                              &osc1Power, &osc2Power, &subPower, &noisePower, &uniPower, &f1Power, &grainsPower, &mpeToggle, &quality })
         addAndMakeVisible (c);
     for (auto* t : { &osc1Power, &osc2Power, &subPower, &noisePower, &uniPower, &f1Power, &grainsPower }) t->colour = accent2;
     rsRecreate.horizontal = true;
     rsRecreate.colour = accent; rsRecreate.filled = true;
     rsRecreate.onClick = [this] { proc.recreateFromSample(); };
+    rsDna.horizontal = true;
+    rsDna.colour = accent2; rsDna.filled = true;
+    rsDna.onClick = [this] { if (onOpenDna) onOpenDna(); };
     rsSpeed    = &knob (ParamID::rsSpeed, "Velocidad", "Mas rapido o mas lento en el tiempo, sin cambiar el tono");
     rsHarm     = &knob (ParamID::rsHarm, "Armonicos", "Volumen de la parte con nota");
     rsPartials = &knob (ParamID::rsPartials, "Parciales", "Volumen de los parciales sueltos (campanas, metales, golpes)");
@@ -258,7 +261,7 @@ void EditView::updateVisibility()
     const bool rsx = resynthEngine();
     for (auto* c : std::initializer_list<juce::Component*> { &wave1, &wave2, &preview1, &preview2, shape1, oct1, shape2, semi2, fine2, &osc1Power, &osc2Power })
         c->setVisible (! s && ! rsx);
-    for (auto* c : std::initializer_list<juce::Component*> { rsSpeed, rsHarm, rsPartials, rsNoise, rsTone, rsStretch, rsWidth, &rsPitch, &rsRecreate })
+    for (auto* c : std::initializer_list<juce::Component*> { rsSpeed, rsHarm, rsPartials, rsNoise, rsTone, rsStretch, rsWidth, &rsPitch, &rsRecreate, &rsDna })
         c->setVisible (rsx);
     rsRecreate.setEnabled (proc.sampleSource.get() != nullptr);
     for (auto* c : std::initializer_list<juce::Component*> { &regionMini, &editRegion, &reverse, &loop, &playMode, smpStart, smpTune, smpTexture, smpGrain,
@@ -384,6 +387,8 @@ void EditView::resized()
         rsPitch.setBounds (bottom.removeFromLeft (150).reduced (0, 1));
         bottom.removeFromLeft (10);
         rsRecreate.setBounds (bottom.removeFromLeft (170).reduced (0, 1));
+        bottom.removeFromLeft (10);
+        rsDna.setBounds (bottom.removeFromLeft (150).reduced (0, 1));
         const int w = a.getWidth() / 7;
         for (auto* k : { rsSpeed, rsHarm, rsPartials, rsNoise, rsTone, rsStretch, rsWidth }) { k->maxKnob = 46; k->setBounds (a.removeFromLeft (w)); }
     }

@@ -14,6 +14,8 @@ NebulaAudioProcessor::NebulaAudioProcessor()
     for (int i = 0; i < numVoices; ++i)
         synth.addVoice (new SynthVoice (voiceCtx));
 
+    startTimerHz (20);   // ADN: aplica los genes estructurales cuando cambian
+
     // Cada instancia nueva tiene su propia semilla (dos Nebula iguales no suenan clonadas); se guarda en el proyecto
     voiceCtx.renderSeed = (juce::uint32) juce::Random::getSystemRandom().nextInt();
 
@@ -157,7 +159,7 @@ NebulaAudioProcessor::RecreateResult NebulaAudioProcessor::recreateFromSample()
     auto model = ResynthBuilder::build (*s, regionStart(), regionEnd(), rootOffset(), prof);
     if (model == nullptr) return RecreateResult::Failed;
 
-    voiceCtx.models.set (model);
+    setBaseModel (model);
     resynthModel64 = model->toBase64();
 
     // Mismo volumen que el original para el A/B
@@ -695,7 +697,7 @@ bool NebulaAudioProcessor::loadUserPreset (const juce::String& name)
     if (xml->hasAttribute ("resynthModel"))
         if (auto m = ResynthModel::fromBase64 (xml->getStringAttribute ("resynthModel")))
         {
-            voiceCtx.models.set (m);
+            setBaseModel (m);
             resynthModel64 = xml->getStringAttribute ("resynthModel");
         }
     state.state.setProperty ("preset", -1, nullptr);
@@ -745,7 +747,7 @@ void NebulaAudioProcessor::setStateInformation (const void* data, int sizeInByte
 
     // Modelo de resíntesis
     if (model64.isNotEmpty())
-        if (auto m = ResynthModel::fromBase64 (model64)) { voiceCtx.models.set (m); resynthModel64 = model64; }
+        if (auto m = ResynthModel::fromBase64 (model64)) { setBaseModel (m); resynthModel64 = model64; }
 
     // Tabla de onda del usuario
     if (userTable.isNotEmpty())
@@ -804,4 +806,109 @@ juce::AudioProcessorEditor* NebulaAudioProcessor::createEditor()
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
     return new NebulaAudioProcessor();
+}
+
+//==============================================================================
+// ADN
+
+void NebulaAudioProcessor::setBaseModel (std::shared_ptr<const ResynthModel> m)
+{
+    std::atomic_store (&baseModel, std::shared_ptr<const ResynthModel> (m));
+    appliedDna = Dna::readStructural (params);
+    voiceCtx.models.set (Dna::makeVariant (m, appliedDna));
+}
+
+void NebulaAudioProcessor::applyDna()
+{
+    const auto now = Dna::readStructural (params);
+    auto base = baseResynthModel();
+    if (base == nullptr) { appliedDna = now; return; }
+    if (now != appliedDna)
+    {
+        appliedDna = now;
+        voiceCtx.models.set (Dna::makeVariant (base, now));
+    }
+}
+
+void NebulaAudioProcessor::timerCallback()
+{
+    applyDna();
+}
+
+juce::int64 NebulaAudioProcessor::nextDnaSeed()
+{
+    const juce::int64 s = (juce::int64) state.state.getProperty ("dnaSeed", 1);
+    state.state.setProperty ("dnaSeed", s + 1, nullptr);
+    return s;
+}
+
+bool NebulaAudioProcessor::isGeneLocked (const juce::String& id) const
+{
+    return juce::StringArray::fromTokens (state.state["dnaLocks"].toString(), ",", "").contains (id);
+}
+
+void NebulaAudioProcessor::setGeneLocked (const juce::String& id, bool locked)
+{
+    auto list = juce::StringArray::fromTokens (state.state["dnaLocks"].toString(), ",", "");
+    list.removeString (id);
+    if (locked) list.add (id);
+    list.removeEmptyStrings();
+    state.state.setProperty ("dnaLocks", list.joinIntoString (","), nullptr);
+}
+
+void NebulaAudioProcessor::resetGene (const juce::String& id)
+{
+    if (auto* p = state.getParameter (id)) p->setValueNotifyingHost (p->getDefaultValue());
+    applyDna();
+}
+
+void NebulaAudioProcessor::mutateDna (float amount, juce::int64 seed)
+{
+    juce::Random r (seed);
+    amount = juce::jlimit (0.0f, 1.0f, amount);
+    for (auto& g : Dna::genes())
+    {
+        auto* p = state.getParameter (g.id);
+        if (p == nullptr) continue;
+        const float v = p->getValue();
+        const float u = r.nextFloat() * 2.0f - 1.0f;   // se consume siempre: los candados no cambian el resto
+        if (isGeneLocked (g.id) || juce::String (g.id) == ParamID::dnaHold) continue;
+        p->setValueNotifyingHost (juce::jlimit (0.0f, 1.0f, v + u * amount * 0.5f));
+    }
+    applyDna();
+}
+
+juce::String NebulaAudioProcessor::dnaToJson() const
+{
+    auto o = new juce::DynamicObject();
+    o->setProperty ("nebulaDna", 1);
+    for (auto& g : Dna::genes())
+        if (auto* p = state.getParameter (g.id)) o->setProperty (g.id, p->convertFrom0to1 (p->getValue()));
+    return juce::JSON::toString (juce::var (o));
+}
+
+bool NebulaAudioProcessor::dnaFromJson (const juce::String& json)
+{
+    const auto v = juce::JSON::parse (json);
+    if (! v.isObject() || ! v.hasProperty ("nebulaDna")) return false;
+    for (auto& g : Dna::genes())
+        if (v.hasProperty (g.id))
+            if (auto* p = state.getParameter (g.id)) p->setValueNotifyingHost (p->convertTo0to1 ((float) (double) v[g.id]));
+    applyDna();
+    return true;
+}
+
+void NebulaAudioProcessor::storeDnaSlot (int slot)
+{
+    state.state.setProperty (slot == 0 ? "dnaSlotA" : "dnaSlotB", dnaToJson(), nullptr);
+}
+
+bool NebulaAudioProcessor::recallDnaSlot (int slot)
+{
+    return dnaFromJson (state.state[slot == 0 ? "dnaSlotA" : "dnaSlotB"].toString());
+}
+
+bool NebulaAudioProcessor::hasDnaSlot (int slot) const
+{
+    return state.state[slot == 0 ? "dnaSlotA" : "dnaSlotB"].toString().isNotEmpty();
 }
