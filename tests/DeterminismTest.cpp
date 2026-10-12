@@ -90,7 +90,7 @@ static juce::AudioBuffer<float> makeSound (const char* kind)
 {
     juce::AudioBuffer<float> b (1, (int) (1.2 * sr));
     juce::Random r (3);
-    constexpr double pi2 = juce::MathConstants<double>::twoPi;
+    static constexpr double pi2 = juce::MathConstants<double>::twoPi;
     double lp = 0;
     for (int i = 0; i < b.getNumSamples(); ++i)
     {

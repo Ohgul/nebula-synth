@@ -63,7 +63,7 @@ namespace Exporter
 
     inline juce::File writeMidi (const std::vector<Note>& notes, double bpm, const juce::String& name)
     {
-        constexpr int ppq = 960;
+        static constexpr int ppq = 960;
         juce::MidiMessageSequence seq;
         seq.addEvent (juce::MidiMessage::tempoMetaEvent ((int) (60000000.0 / juce::jmax (30.0, bpm))), 0);
         auto ticks = [&] (double secs) { return secs * bpm / 60.0 * ppq; };

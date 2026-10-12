@@ -127,7 +127,7 @@ namespace WavetableFactory
     // Suma de senos armónicos (vía FFT inversa: rápido)
     inline std::vector<float> additive (const std::function<float (int harmonic)>& amp, int maxHarm = 256)
     {
-        constexpr int N = Wavetable::frameSize;
+        static constexpr int N = Wavetable::frameSize;
         juce::dsp::FFT fft (11);
         std::vector<float> buf ((size_t) N * 2, 0.0f);
         for (int h = 1; h <= juce::jmin (maxHarm, N / 2 - 1); ++h)
@@ -139,7 +139,7 @@ namespace WavetableFactory
     // Seno → triángulo → sierra → cuadrada
     inline std::shared_ptr<Wavetable> basic()
     {
-        constexpr int n = 24;
+        static constexpr int n = 24;
         auto shape = [] (int k, int h) -> float
         {
             const float sine = h == 1 ? 1.0f : 0.0f;
@@ -161,7 +161,7 @@ namespace WavetableFactory
     // De 1 a muchos armónicos, cada vez más brillante
     inline std::shared_ptr<Wavetable> harmonics()
     {
-        constexpr int n = 32;
+        static constexpr int n = 32;
         std::vector<std::vector<float>> cycles;
         for (int k = 0; k < n; ++k)
         {
@@ -181,7 +181,7 @@ namespace WavetableFactory
     {
         struct V { float f1, f2, f3; };
         const V vowels[] { { 800, 1200, 2500 }, { 400, 2000, 2550 }, { 300, 2300, 3000 }, { 450, 800, 2830 }, { 325, 700, 2530 } };
-        constexpr int n = 25;
+        static constexpr int n = 25;
         const float fund = 110.0f;   // fundamental de referencia
         std::vector<std::vector<float>> cycles;
         for (int k = 0; k < n; ++k)
@@ -205,7 +205,7 @@ namespace WavetableFactory
     // Formas digitales: escalones y pulsos que se van fragmentando
     inline std::shared_ptr<Wavetable> digital()
     {
-        constexpr int n = 24;
+        static constexpr int n = 24;
         std::vector<std::vector<float>> cycles;
         for (int k = 0; k < n; ++k)
         {

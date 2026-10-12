@@ -20,8 +20,8 @@
 namespace Forge
 {
     // Sube cuando cambia algo del motor que altera el sonido de un patch (la base queda desactualizada)
-    constexpr int engineDspVersion = 1;
-    constexpr int datasetFormatVersion = 1;
+    static constexpr int engineDspVersion = 1;
+    static constexpr int datasetFormatVersion = 1;
 
     struct CategorySpec { Category cat; int note; double holdS, totalS; bool pitched; };
 

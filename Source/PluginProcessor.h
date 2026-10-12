@@ -173,6 +173,7 @@ public:
     std::vector<Forge::PatchCandidate> forgeCandidates() const  { const juce::ScopedLock sl (forgeLock); return forgeList; }
     Forge::ReferenceFeatures forgeReference() const             { const juce::ScopedLock sl (forgeLock); return forgeFeatures; }
     std::vector<std::vector<Forge::PatchCandidate>> forgeGenerations() const { const juce::ScopedLock sl (forgeLock); return forgeHistory; }
+    bool restoreForgeGeneration (int historyIndex);             // la generación guardada pasa a la lista; la actual queda guardada en su lugar
     void auditionForgeCandidate (int index);                    // escuchar sin cambiar el sonido
     void auditionForgeReference();                              // la referencia, afinada a su tecla
     void applySynthPatch (const Forge::SynthPatch&);            // el patch pasa a ser el sonido (motor Synth)

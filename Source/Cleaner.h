@@ -283,7 +283,7 @@ namespace Cleaner
 
         void computeHpss()
         {
-            constexpr int L = 17;
+            static constexpr int L = 17;
             hp.assign ((size_t) frames * bins, { 0.0f, 0.0f });
             std::vector<float> w (L);
             for (int f = 0; f < frames; ++f)

@@ -98,6 +98,14 @@ public:
     {
         for (auto* b : { &searchButton, &cancelButton, &refButton, &closeButton, &stopButton, &crossButton }) { addAndMakeVisible (b); b->horizontal = true; }
         addAndMakeVisible (graphView);
+        generationBox.setTextWhenNothingSelected ("Generaciones guardadas");
+        generationBox.setTooltip ("Volver a una generacion anterior (la actual queda guardada en su lugar)");
+        generationBox.onChange = [this]
+        {
+            const int id = generationBox.getSelectedId();
+            if (id > 0 && proc.restoreForgeGeneration (id - 1)) status = "Generacion restaurada";
+        };
+        addAndMakeVisible (generationBox);
         addAndMakeVisible (locks);
         crossButton.colour = NebulaColours::abyss;
         crossButton.onClick = [this] { crossover(); };
@@ -174,7 +182,10 @@ public:
         bottom.removeFromTop (6);
         auto lockArea = bottom.removeFromBottom (32);
         locksLabel = bottom.removeFromBottom (16);
-        crossButton.setBounds (bottom.removeFromRight (150).removeFromTop (30).reduced (2));
+        auto side = bottom.removeFromRight (190);
+        crossButton.setBounds (side.removeFromTop (30).reduced (2));
+        side.removeFromTop (6);
+        generationBox.setBounds (side.removeFromTop (28).reduced (2));
         bottom.removeFromRight (6);
         graphView.setBounds (bottom);
         locks.setBounds (lockArea);
@@ -242,6 +253,15 @@ private:
             rows.push_back (std::move (row));
         }
         seenRuns = proc.forgeRuns.load();
+        {
+            generationBox.clear (juce::dontSendNotification);
+            const auto gens = proc.forgeGenerations();
+            for (int g = 0; g < (int) gens.size(); ++g)
+                if (! gens[(size_t) g].empty())
+                    generationBox.addItem ("Gen " + juce::String (gens[(size_t) g].front().generation) + ": " + juce::String ((int) gens[(size_t) g].size())
+                                           + " cand., mejor " + juce::String (juce::roundToInt (gens[(size_t) g].front().fidelity.overall * 100)) + " %", g + 1);
+            generationBox.setEnabled (generationBox.getNumItems() > 0);
+        }
         picked.clear();
         crossButton.setEnabled (false);
         if (! cands.empty()) graphView.setPatch (cands.front().patch, cands.front().id + "  " + cands.front().patch.architecture);
@@ -279,6 +299,7 @@ private:
                crossButton { "Cruzar", Icons::dice(), "8 hijos que toman cada modulo entero de uno de los dos elegidos (respetando candados)" };
     PatchGraphView graphView;
     ModuleLockStrip locks;
+    juce::ComboBox generationBox;
     std::vector<int> picked;
     juce::Rectangle<int> locksLabel;
     juce::TextEditor seedBox;

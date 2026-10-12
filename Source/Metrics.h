@@ -379,7 +379,7 @@ inline double clickScoreDb (const juce::AudioBuffer<float>& b, int at, double sr
 // Fracción de la energía (dB) entre lo y hi Hz, con un espectro promedio de todo el sonido
 inline double bandFractionDb (const std::vector<double>& x, double sr, double lo, double hi)
 {
-    constexpr int order = 12, N = 1 << order;
+    static constexpr int order = 12, N = 1 << order;
     juce::dsp::FFT fft (order);
     std::vector<float> buf ((size_t) N * 2);
     double inBand = 0, total = 0;

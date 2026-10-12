@@ -46,7 +46,7 @@ double flatnessDb (const juce::AudioBuffer<float>& b, double t0, double t1)
 {
     const auto m = Bench::toMono (b);
     const int a = (int) (t0 * sr), z = juce::jmin ((int) m.size(), (int) (t1 * sr));
-    constexpr int order = 12, N = 1 << order;
+    static constexpr int order = 12, N = 1 << order;
     juce::dsp::FFT fft (order);
     std::vector<double> pw ((size_t) N / 2, 0.0);
     for (int s = a; s + N <= z; s += N / 2)
@@ -290,6 +290,14 @@ int NEBULA_TEST_ENTRY (int, char**)
         check ("FORGE: cruzar dos candidatos da 8 hijos medidos (candado respetado)", ok && fromSecond > 0,
                juce::String ((int) kids.size()) + " hijos, " + juce::String (fromSecond) + " con modulos del segundo padre; mejor " + juce::String (kids.empty() ? 0.0f : kids[0].fidelity.overall * 100, 0) + " %");
         check ("FORGE: la generacion de los padres queda guardada", ! p->forgeGenerations().empty());
+        const auto kidsBefore = p->forgeCandidates();
+        const bool restored = p->restoreForgeGeneration ((int) p->forgeGenerations().size() - 1);
+        const auto back = p->forgeCandidates();
+        bool same = restored && back.size() == parents.size();
+        for (size_t i = 0; same && i < back.size(); ++i) same = back[i].patch.sameSound (parents[i].patch);
+        const auto hist = p->forgeGenerations();
+        check ("FORGE: restaurar la generacion anterior (la de los hijos queda guardada)", same && ! hist.empty() && hist.back().size() == kidsBefore.size()
+               && hist.back().front().patch.sameSound (kidsBefore.front().patch));
     }
 
     std::printf ("\n%s\n", failures == 0 ? "TODO OK" : (juce::String (failures) + " FALLOS").toRawUTF8());

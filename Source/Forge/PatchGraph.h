@@ -18,7 +18,7 @@
 namespace Forge
 {
     enum class Module { Osc1, Osc2, Fm, Sub, Noise, Unison, Filter1, Filter2, Drive, Amp, Env2, Env3, Lfo1, Lfo2, Voice, count };
-    constexpr int moduleCount = (int) Module::count;
+    static constexpr int moduleCount = (int) Module::count;
 
     struct ModuleInfo { Module m; const char* key; const char* name; bool optional; std::vector<const char*> params; };
 

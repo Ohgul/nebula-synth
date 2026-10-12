@@ -61,7 +61,7 @@ public:
         ctx.lastNote = -1.0f;
         out.setSize (2, totalSamples);
         out.clear();
-        constexpr int block = 512;
+        static constexpr int block = 512;
         for (int pos = 0; pos < totalSamples; pos += block)
         {
             const int n = juce::jmin (block, totalSamples - pos);
@@ -88,7 +88,7 @@ public:
         ctx.lastNote = -1.0f;
 
         out.assign ((size_t) totalSamples, 0.0f);
-        constexpr int block = 512;
+        static constexpr int block = 512;
         juce::AudioBuffer<float> buf (2, block);
         for (int pos = 0; pos < totalSamples; pos += block)
         {
@@ -168,7 +168,7 @@ namespace ImitationTools
     // Distancia del patch al objetivo, con castigo si la nota no es la misma
     inline float distance (OfflineSynth& offline, SoundAnalyser& analyser, const Target& t, const Genome& g, std::vector<float>& audio, bool pitchCheck = true)
     {
-        constexpr double sr = 44100.0;
+        static constexpr double sr = 44100.0;
         const int total = (int) (t.lengthS * sr) + 1024;
         const int hold = (int) (t.lengthS * 0.85 * sr);
         offline.setGenome (g);

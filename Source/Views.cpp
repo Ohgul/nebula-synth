@@ -364,7 +364,7 @@ void EditView::paint (juce::Graphics& g)
 void EditView::resized()
 {
     auto r = getLocalBounds();
-    constexpr int gap = 10;
+    static constexpr int gap = 10;
 
     // ---- Fila 1 ----
     auto row1 = r.removeFromTop (250);
@@ -638,7 +638,7 @@ void ModView::paint (juce::Graphics& g)
 void ModView::resized()
 {
     auto r = getLocalBounds();
-    constexpr int gap = 10;
+    static constexpr int gap = 10;
     rEnv = r.removeFromLeft (420);
     r.removeFromLeft (gap);
     auto mid = r.removeFromLeft (330);

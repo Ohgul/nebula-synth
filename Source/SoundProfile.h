@@ -385,7 +385,7 @@ namespace SoundProfiler
         p.f0 = 440.0f * std::exp2 ((p.note - 69.0f) / 12.0f);
 
         // ---- Análisis armónico por cuadros (y resíntesis) ----
-        constexpr int order = 13, L = 1 << order, periods = 4, binsPerHarm = periods;
+        static constexpr int order = 13, L = 1 << order, periods = 4, binsPerHarm = periods;
         juce::dsp::FFT fft (order);
         std::vector<float> buf ((size_t) L * 2), win ((size_t) L);
         double sumW = 0.0, sumW2 = 0.0;
@@ -404,7 +404,7 @@ namespace SoundProfiler
             else smoothNote[i] = contour.note[i];
         }
 
-        constexpr float scanCurve = 0.3f;                    // curva de la Env 3 que recorre la tabla
+        static constexpr float scanCurve = 0.3f;                    // curva de la Env 3 que recorre la tabla
         const float scanP = std::exp2 (-scanCurve * 2.0f);  // cuadros más densos al principio (el ataque)
         const double f0Global = p.pitched ? 440.0 * std::exp2 ((p.note - 69.0) / 12.0) : 110.0;
         // Cuadros: numFrames > 0 = cantidad fija repartida con la curva de siempre (análisis rápido);
@@ -556,7 +556,7 @@ namespace SoundProfiler
                 // Solo en graves: en el resto el golpe (martillo, púa) se pierde si se quita de aquí; en los graves
                 // el ataque lo reproduce la cabeza original y así el ciclo no arrastra el click.
                 const bool inAttack = t - p.onsetS < 0.08 && f0Global < 110.0;
-                constexpr int fs = 2048;
+                static constexpr int fs = 2048;
                 std::vector<float> spec ((size_t) fs * 2, 0.0f);
                 const double ph1 = phs[1];
                 for (int k = 1; k <= juce::jmin (maxK, fs / 2 - 1); ++k)
@@ -627,7 +627,7 @@ namespace SoundProfiler
             resynth->noiseRms = noiseRms;
             const float nMax = *std::max_element (noiseRms.begin(), noiseRms.end());
             const bool useNoise = p.noiseRatio > 0.03f && ! p.inharmonic && nMax > 0.0f;
-            constexpr float whiteRms = 1.2f * 0.57735f;   // ruido del sinte con cantidad 1
+            static constexpr float whiteRms = 1.2f * 0.57735f;   // ruido del sinte con cantidad 1
             resynth->noiseAmount = useNoise ? juce::jlimit (0.0f, 1.0f, (nMax / peakCycle) / whiteRms) : 0.0f;
             const float fc = juce::jlimit (200.0f, 20000.0f, p.noiseBrightnessHz * 1.3f);
             resynth->noiseColor = fc > 15000.0f ? 1.0f : std::log (fc / 200.0f) / std::log (100.0f);
@@ -672,7 +672,7 @@ namespace SoundProfiler
         if (adaptive && resynth != nullptr && resynth->cycles.size() > 2)
         {
             const int nc = (int) resynth->cycles.size();
-            constexpr int H = 48;
+            static constexpr int H = 48;
             std::vector<std::array<float, H + 2>> feat ((size_t) nc);
             float levelMax = 1.0e-9f;
             for (int f = 0; f < nc; ++f) levelMax = juce::jmax (levelMax, std::sqrt (harmRmsF[(size_t) f] * harmRmsF[(size_t) f] + noiseRms[(size_t) f] * noiseRms[(size_t) f]));
@@ -692,7 +692,7 @@ namespace SoundProfiler
                 const float lvl = std::sqrt (harmRmsF[(size_t) f] * harmRmsF[(size_t) f] + noiseRms[(size_t) f] * noiseRms[(size_t) f]);
                 feat[(size_t) f][H + 1] = juce::jmax (-60.0f, 20.0f * std::log10 (lvl / levelMax + 1.0e-9f));
             }
-            constexpr float tol = 0.4f;   // dB: medio por armónico, o de nivel
+            static constexpr float tol = 0.4f;   // dB: medio por armónico, o de nivel
             auto err = [&] (int i, int j, int& at)
             {
                 float worst = 0.0f; at = -1;
@@ -711,7 +711,7 @@ namespace SoundProfiler
             };
             std::vector<int> keep { 0, nc - 1 };
             for (int k = 1; k < juce::jmin (nc - 1, 4); ++k) keep.push_back (k);   // el ataque siempre con detalle
-            constexpr int cap = 192;
+            static constexpr int cap = 192;
             for (;;)
             {
                 std::sort (keep.begin(), keep.end());

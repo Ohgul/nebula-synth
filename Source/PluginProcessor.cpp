@@ -1110,6 +1110,18 @@ void NebulaAudioProcessor::collectForgeResult()
     ++forgeRuns;
 }
 
+bool NebulaAudioProcessor::restoreForgeGeneration (int historyIndex)
+{
+    {
+        const juce::ScopedLock sl (forgeLock);
+        if (historyIndex < 0 || historyIndex >= (int) forgeHistory.size() || forgeJob.isRunning()) return false;
+        std::swap (forgeList, forgeHistory[(size_t) historyIndex]);   // nada se pierde: se intercambian
+        forgeDiagnostics = "generacion " + juce::String (forgeList.empty() ? 0 : forgeList.front().generation) + " restaurada";
+    }
+    ++forgeRuns;
+    return true;
+}
+
 void NebulaAudioProcessor::auditionForgeCandidate (int index)
 {
     const auto list = forgeCandidates();

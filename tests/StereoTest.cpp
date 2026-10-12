@@ -65,7 +65,7 @@ static Stats renderChord (NebulaAudioProcessor& p, double seconds, bool notes = 
 int NEBULA_TEST_ENTRY (int, char**)
 {
     juce::ScopedJuceInitialiser_GUI gui;
-    constexpr double pi2 = juce::MathConstants<double>::twoPi;
+    static constexpr double pi2 = juce::MathConstants<double>::twoPi;
     const int n = (int) (2.0 * sr);
     auto tone = [&] (double t, double det) { double s = 0; for (int k = 1; k < 25; ++k) s += std::sin (pi2 * k * 130.81 * (1.0 + det * (k % 3)) * t) / k; return 0.25 * s * std::min (1.0, t / 0.2); };
 

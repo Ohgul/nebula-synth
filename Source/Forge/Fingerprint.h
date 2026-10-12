@@ -23,8 +23,8 @@
 // ===========================================================================
 namespace Forge
 {
-    constexpr int fingerprintVersion = 1;
-    constexpr int fingerprintDims = 69;
+    static constexpr int fingerprintVersion = 1;
+    static constexpr int fingerprintDims = 69;
     using FingerprintVec = std::array<float, fingerprintDims>;
 
     enum class FpBlock { Envelope, Harmonics, Brightness, Mel, Pitch, Scalars };
