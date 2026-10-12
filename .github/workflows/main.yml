@@ -113,8 +113,8 @@ jobs:
           tail -5 auval.log
 
       - name: pluginval (VST3 y AU)
-        continue-on-error: true
         run: |
+          fallo=0
           curl -sSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
           unzip -q -o pluginval.zip -d pluginval
           PV=pluginval/pluginval.app/Contents/MacOS/pluginval
@@ -125,10 +125,12 @@ jobs:
               echo "::notice title=pluginval $n::pluginval nivel 5 aprobado"
             else
               grep -E "FAILED|\*\*\*|Error" "pluginval-$n.log" | head -10 | while IFS= read -r l; do echo "::warning title=pluginval $n::$l"; done
-              echo "::warning title=pluginval $n::pluginval nivel 5 NO aprobado"
+              echo "::error title=pluginval $n::pluginval nivel 5 NO aprobado"
+              fallo=1
             fi
             tail -5 "pluginval-$n.log"
           done
+          exit $fallo
 
       - name: Crear instalador .pkg
         run: |
@@ -203,7 +205,6 @@ jobs:
           if [ "$fallos" -gt 0 ]; then echo "::error::$fallos pruebas fallaron en Windows"; exit 1; fi
 
       - name: pluginval (VST3, Windows)
-        continue-on-error: true
         shell: pwsh
         run: |
           Invoke-WebRequest -Uri https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip -OutFile pluginval.zip
@@ -214,7 +215,8 @@ jobs:
           if ($p.ExitCode -eq 0) { Write-Output "::notice title=pluginval Windows::pluginval nivel 5 aprobado (VST3)" }
           else {
             Select-String -Path pluginval-win.log -Pattern "FAILED|\*\*\*|Error" | Select-Object -First 10 | ForEach-Object { Write-Output "::warning title=pluginval Windows::$($_.Line)" }
-            Write-Output "::warning title=pluginval Windows::pluginval nivel 5 NO aprobado (codigo $($p.ExitCode))"
+            Write-Output "::error title=pluginval Windows::pluginval nivel 5 NO aprobado (codigo $($p.ExitCode))"
+            exit 1
           }
 
       - name: Subir VST3 de Windows y resultados

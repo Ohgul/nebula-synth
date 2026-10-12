@@ -11,8 +11,8 @@ Esta lista es explícita a propósito. Lo que aparece aquí **no** está resuelt
   - El desarrollo se hizo en Linux, sin Ableton.
   - Para la prueba manual, sigue `docs/PRUEBA-ABLETON.md`.
 - **No hay firma ni notarización de Apple.** El instalador está firmado *ad hoc* y macOS muestra una advertencia la primera vez. Hace falta una cuenta de Apple Developer.
-- **pluginval** corre en el CI desde la rama `feature/nebula-0.4.0` (macOS: VST3 y AU; Windows: VST3, nivel 5), pero todavía como paso informativo. Hasta ver un resultado aprobado, no está verificado.
-- **Windows:** el trabajo de CI compila y prueba con MSVC desde la rama `feature/nebula-0.4.0`. Nadie lo probó en un DAW de Windows.
+- **pluginval nivel 5** está aprobado en el CI desde la rama `feature/nebula-0.4.0`: en macOS (VST3 y AU) y en Windows (VST3). Si falla, frena el CI.
+- **Windows:** el CI compila con MSVC y pasa las pruebas desde la rama `feature/nebula-0.4.0`. Nadie lo probó en un DAW de Windows.
 
 ## Resíntesis
 
