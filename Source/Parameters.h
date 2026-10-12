@@ -194,6 +194,7 @@ namespace ParamID
     // F · Transformación
     inline constexpr const char* transform     = "transform";       // ABISMO (-1) ← ORIGINAL (0) → COSMOS (+1)
     inline constexpr const char* identity      = "identity";        // cuánto del original se conserva al transformar
+    inline constexpr const char* transformOut  = "transformOut";    // nivel de salida de Cosmos/Abismo (dB)
 }
 
 // ---------------------------------------------------------------------------
@@ -513,6 +514,7 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
     add (new C ({ ParamID::dnaHold, 1 }, "ADN Al sostener", holdNames(), 0));
     add (new F ({ ParamID::transform, 1 }, "Abismo - Original - Cosmos", bip, 0.0f, Attr().withStringFromValueFunction (ParamFormat::bipolar)));
     add (new F ({ ParamID::identity, 1 }, "Identidad", unit, 0.0f, pct));
+    add (new F ({ ParamID::transformOut, 1 }, "Cosmos/Abismo Salida", NormalisableRange<float> (-24.0f, 6.0f), 0.0f, Attr().withStringFromValueFunction (ParamFormat::decibels)));
 
     return { p.begin(), p.end() };
 }
@@ -543,7 +545,7 @@ namespace P
         fxDelayOn, fxDelaySync, fxDelayMs, fxDelayFb, fxDelayMix, fxDelayPing, fxDelayTone,
         fxRevOn, fxRevSize, fxRevDecay, fxRevDamp, fxRevPre, fxRevMix, fxWidth, quality, mpeOn, master,
         dnaPitchDepth, dnaFormant, dnaTilt, dnaTiltEvolve, dnaOddEven, dnaHarmonics, dnaNoiseTilt, dnaRough, dnaDensity,
-        dnaAttack, dnaTransient, dnaRelease, dnaEvolve, dnaHold, transform, identity,
+        dnaAttack, dnaTransient, dnaRelease, dnaEvolve, dnaHold, transform, identity, transformOut,
         count
     };
 
@@ -574,7 +576,7 @@ namespace P
             ParamID::quality, ParamID::mpeOn, ParamID::master,
             ParamID::dnaPitchDepth, ParamID::dnaFormant, ParamID::dnaTilt, ParamID::dnaTiltEvolve, ParamID::dnaOddEven, ParamID::dnaHarmonics,
             ParamID::dnaNoiseTilt, ParamID::dnaRough, ParamID::dnaDensity, ParamID::dnaAttack, ParamID::dnaTransient, ParamID::dnaRelease,
-            ParamID::dnaEvolve, ParamID::dnaHold, ParamID::transform, ParamID::identity
+            ParamID::dnaEvolve, ParamID::dnaHold, ParamID::transform, ParamID::identity, ParamID::transformOut
         };
         static_assert (sizeof (list) / sizeof (list[0]) == count, "lista de parámetros incompleta");
         return list;

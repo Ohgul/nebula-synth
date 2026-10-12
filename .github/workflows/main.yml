@@ -62,6 +62,8 @@ jobs:
           run V3 test-output/v3
           run Midi
           run Dna
+          run Transform
+          run Render test-output/render
           if [ "$fallos" -gt 0 ]; then echo "::error::$fallos pruebas fallaron"; exit 1; fi
 
       - name: Compatibilidad con proyectos v3 (informativa en Mac)

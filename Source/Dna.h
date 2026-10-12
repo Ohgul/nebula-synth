@@ -16,15 +16,17 @@ namespace Dna
     {
         float tilt = 0.0f, tiltEvolve = 0.0f, oddEven = 0.0f, harmonics = 1.0f, formant = 0.0f;
         float evolve = 1.0f;   // 0 = timbre fijo (el promedio), 1 = como el original, 2 = cambios exagerados
+        float cosmos = 0.0f, abyss = 0.0f;   // transformación (ver Transform.h)
         bool neutral() const
         {
             return std::abs (tilt) < 0.01f && std::abs (tiltEvolve) < 0.01f && std::abs (oddEven) < 0.001f
-                && harmonics > 0.999f && std::abs (formant) < 0.01f && std::abs (evolve - 1.0f) < 1.0e-3f;
+                && harmonics > 0.999f && std::abs (formant) < 0.01f && std::abs (evolve - 1.0f) < 1.0e-3f
+                && cosmos < 1.0e-3f && abyss < 1.0e-3f;
         }
         bool operator== (const Structural& o) const
         {
             return tilt == o.tilt && tiltEvolve == o.tiltEvolve && oddEven == o.oddEven && harmonics == o.harmonics
-                && formant == o.formant && evolve == o.evolve;
+                && formant == o.formant && evolve == o.evolve && cosmos == o.cosmos && abyss == o.abyss;
         }
         bool operator!= (const Structural& o) const { return ! (*this == o); }
     };
@@ -35,6 +37,10 @@ namespace Dna
         s.tilt = p[P::dnaTilt]; s.tiltEvolve = p[P::dnaTiltEvolve]; s.oddEven = p[P::dnaOddEven];
         s.harmonics = p[P::dnaHarmonics]; s.formant = p[P::dnaFormant]; s.evolve = p[P::dnaEvolve];
         if (std::abs (s.evolve - 1.0f) < 1.0e-4f) s.evolve = 1.0f;
+        // la transformación se cuantiza a pasos de 1 % (cada paso reconstruye la tabla)
+        const float t = std::round (p[P::transform] * 100.0f) / 100.0f;
+        const float keep = 1.0f - juce::jlimit (0.0f, 1.0f, std::round (p[P::identity] * 100.0f) / 100.0f);   // Identidad conserva el original
+        s.cosmos = juce::jmax (0.0f, t) * keep; s.abyss = juce::jmax (0.0f, -t) * keep;
         return s;
     }
 
@@ -50,6 +56,46 @@ namespace Dna
             g /= 1.0 + std::pow (ratio / K, 8.0);
         }
         return (float) g;
+    }
+
+    // Cosmos / Abismo sobre el espectro de un ciclo (armónico k = bin k). Azar con semillas fijas: siempre igual.
+    inline void transformSpectrum (std::vector<double>& amp, std::vector<double>& ph, int frame, int frames, float cosmos, float abyss)
+    {
+        const int nb = (int) amp.size();
+        if (cosmos > 0.0f)
+        {
+            // expansión: eco del espectro una octava (k <- k/2) y una quinta (k <- 2k/3) arriba, y difuminado
+            std::vector<double> e (amp);
+            for (int k = 2; k < nb; ++k)
+            {
+                if (k % 2 == 0) e[(size_t) k] += cosmos * 0.55 * amp[(size_t) (k / 2)];
+                if (k % 3 == 0) e[(size_t) k] += cosmos * 0.35 * amp[(size_t) (2 * k / 3)];
+            }
+            const double w = 0.3 * cosmos;
+            for (int k = 2; k < nb - 1; ++k) amp[(size_t) k] = (1.0 - 2.0 * w) * e[(size_t) k] + w * (e[(size_t) k - 1] + e[(size_t) k + 1]);
+            // fases abiertas: la forma de onda pierde el pico (más suave, más "pad")
+            juce::Random r (0xC05305);
+            for (int k = 2; k < nb; ++k) ph[(size_t) k] += cosmos * juce::MathConstants<double>::pi * (r.nextDouble() * 2.0 - 1.0);
+        }
+        if (abyss > 0.0f)
+        {
+            // fragmentación: bandas de armónicos que se apagan; el patrón cambia cada octavo de la nota
+            const int segment = juce::jmax (1, frames / 8);
+            juce::Random r (0xAB1550 + (frame / segment) * 7919);
+            for (int k = 2; k < nb;)
+            {
+                const int width = 2 + r.nextInt (5);
+                const bool off = r.nextFloat() < 0.55f * abyss;
+                for (int j = k; j < juce::jmin (nb, k + width); ++j) if (off) amp[(size_t) j] *= 1.0 - abyss;
+                k += width;
+            }
+            // pliegue: lo que pasa del armónico K vuelve reflejado hacia abajo (aspereza metálica)
+            const int K = 4 + (int) (60.0f * (1.0f - abyss));
+            for (int k = K + 1; k < juce::jmin (nb, 2 * K); ++k) amp[(size_t) (2 * K - k)] += abyss * amp[(size_t) k];
+            // deformación: niveles al azar ±12 dB · abismo (fijos por armónico)
+            juce::Random g (0xDEF0A);
+            for (int k = 1; k < nb; ++k) amp[(size_t) k] *= std::pow (10.0, abyss * 12.0 * (g.nextDouble() * 2.0 - 1.0) / 20.0);
+        }
     }
 
     // Variante del modelo con los genes estructurales aplicados (mismo número de cuadros y tiempos: se puede
@@ -110,8 +156,9 @@ namespace Dna
             {
                 const double rmsIn = rmsIns[(size_t) f];
                 const float pos = (float) ((f < (int) base->times.size() ? base->times[(size_t) f] : 0.0) / total);
-                const auto& amp = amps[(size_t) f];
-                const auto& ph = phs[(size_t) f];
+                auto& amp = amps[(size_t) f];
+                auto& ph = phs[(size_t) f];
+                if (s.cosmos > 0.0f || s.abyss > 0.0f) transformSpectrum (amp, ph, f, frames, s.cosmos, s.abyss);
                 for (int k = 1; k < fs / 2; ++k)
                 {
                     double a = amp[(size_t) k];

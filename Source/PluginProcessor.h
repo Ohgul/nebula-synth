@@ -13,6 +13,7 @@
 #include "FxChain.h"
 #include "Exporter.h"
 #include "Dna.h"
+#include "Similarity.h"
 
 class NebulaAudioProcessor : public juce::AudioProcessor,
                              private juce::AsyncUpdater,
@@ -134,7 +135,9 @@ public:
     enum class RecipeOrigin { None, Recreated, Imitated, WaveOnly };
     RecipeOrigin recipeOrigin = RecipeOrigin::None;
     juce::String recipeText();                // receta completa del sonido actual
-    float similarityOfCurrentPatch();         // parecido del patch actual con la sección del sample
+    float similarityOfCurrentPatch();         // parecido del patch actual con la sección del sample (0..1, honesto)
+    SimilarityReport measureSimilarity();     // el mismo parecido, con el detalle por aspecto
+    SimilarityReport lastReport;              // último parecido medido (color, envolvente, tono)
 
     // Arrastrar un audio al oscilador: se vuelve la tabla "Usuario"
     bool makeWavetableFromFile (const juce::File& file, juce::String& error);
@@ -194,6 +197,9 @@ private:
     std::unique_ptr<juce::dsp::Oversampling<float>> os2, os4;
     int currentFactor = 1, maxBlock = 512;
     float dcX[2] {}, dcY[2] {};
+public:
+    std::atomic<int> nonFiniteBlocks { 0 };   // bloques silenciados por valores no finitos (para pruebas y diagnóstico)
+private:
     juce::MidiBuffer scaledMidi;
     Genome reference;
     juce::String resynthModel64;

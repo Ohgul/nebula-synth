@@ -244,6 +244,11 @@ public:
     struct Genes { float pitchDepth = 1.0f, attack = 1.0f, release = 1.0f, transient = 1.0f, noiseTilt = 0.0f, rough = 0.0f, density = 0.0f; bool freeze = false; };
     void setGenes (const Genes& g) { genes = g; }
 
+    // Cosmos/Abismo sobre el recorrido del modelo (lo pone la voz en cada bloque)
+    struct Morph { float speedMul = 1.0f, wander = 0.0f, ghost = 0.0f, jumps = 0.0f; };
+    void setMorph (const Morph& mo) { morph = mo; }
+    void seedMorph (juce::int64 seed) { morphRng.setSeed (seed); wanderPhase = morphRng.nextDouble(); ghostL = ghostR = 0.0; posSmInit = false; }
+
     // Cambia a una variante del mismo modelo (mismo número de cuadros) sin cortar la nota: así los genes
     // estructurales del ADN también se oyen en notas que ya están sonando y se pueden automatizar.
     void swapModel (std::shared_ptr<const ResynthModel> m)
@@ -277,6 +282,13 @@ public:
         if (m.hasLoop()) tt = juce::jlimit (0.0, (double) m.times.back(), t);
         else if (m.sustained) tt = juce::jmin (tt, (double) m.times.back());
         frame = m.frameAt (tt);
+        if (morph.wander > 0.0f && m.frames() > 1)
+        {
+            // Cosmos: el timbre deriva despacio alrededor de donde va
+            wanderPhase += 0.05 * samples / sr; wanderPhase -= std::floor (wanderPhase);
+            const float off = morph.wander * (float) (m.frames() - 1) * (float) std::sin (juce::MathConstants<double>::twoPi * wanderPhase);
+            frame = juce::jlimit (0.0f, (float) (m.frames() - 1), frame + off);
+        }
         const int f0 = (int) frame, f1 = juce::jmin (m.frames() - 1, f0 + 1);
         const float w = frame - (float) f0;
         auto lerp = [w] (float a, float b) { return a + (b - a) * w; };
@@ -294,6 +306,14 @@ public:
         harmTarget = harm * m.harmonicLevel * env;
         harmStep = (harmTarget - harmGain) / (float) juce::jmax (1, samples);
         position = m.frames() > 1 ? frame / (float) (m.frames() - 1) : 0.0f;
+        if (morph.jumps > 0.0f || morph.wander > 0.0f)
+        {
+            // con saltos o deriva, la posición en la tabla se desliza (~10 ms) en vez de saltar
+            if (! posSmInit) { posSm = position; posSmInit = true; }
+            posSm += (position - posSm) * (float) juce::jmin (1.0, samples / (0.01 * sr));
+            position = posSm;
+        }
+        else posSmInit = false;
 
         rampLen = juce::jmax (1, samples);
         const double nyq = sr * 0.45;
@@ -325,6 +345,15 @@ public:
             bandStep[(size_t) b] = (target - bandAmp[(size_t) b]) / (float) rampLen;
         }
         double adv = speed * samples / sr;
+        // Cosmos: el cuerpo del sonido se recorre más despacio (el ataque no se toca)
+        if (morph.speedMul != 1.0f && t >= (m.hasLoop() ? (double) m.loopStart : juce::jmin (0.3, 0.25 * (double) m.times.back()))) adv *= morph.speedMul;
+        if (morph.jumps > 0.0f && morphRng.nextFloat() < morph.jumps * (float) samples / (float) sr)
+        {
+            // Abismo: salta a otro punto del sonido (dentro del cuerpo si lo tiene) y a veces lo recorre al revés
+            const double end = m.hasLoop() ? (double) m.releaseStart : (double) m.times.back();
+            const double start = m.hasLoop() && ! released ? (double) m.loopStart * morphRng.nextDouble() : 0.0;
+            if (! released) { t = start + morphRng.nextDouble() * juce::jmax (0.0, end - start); dir = morphRng.nextFloat() < 0.5f ? -1.0 : 1.0; }
+        }
         // Ataque y cola del ADN: estiran o comprimen esos tramos del tiempo del modelo
         const double attackEnd = m.hasLoop() ? (double) m.loopStart : juce::jmin (0.3, 0.25 * (double) m.times.back());
         if (t < attackEnd) adv /= juce::jmax (0.05f, genes.attack);
@@ -357,6 +386,7 @@ public:
         if (! hasModel()) return;
         const auto& m = *model;
         float centre = 0.0f;
+        ghostOutL = ghostOutR = 0.0f;
 
         // Transitorio / cabeza original del ataque
         float modelGain = 1.0f, trOut = 0.0f;   // la resíntesis entra cuando termina la cabeza
@@ -401,6 +431,17 @@ public:
                 phase3 += hz * (1.0 - 0.006 * d) / sr; if (phase3 >= 1.0) phase3 -= std::floor (phase3);
             }
             centre += v * harmGain;
+            if (morph.ghost > 0.0f)
+            {
+                // Cosmos: capa fantasma una octava arriba, levemente desafinada a cada lado (abre el estéreo)
+                const int mip2 = Wavetable::mipFor (hz * 2.0, sr);
+                const float gl = m.harmonic->read (ghostL, position, mip2), gr = m.harmonic->read (ghostR, position, mip2);
+                ghostL += 2.0 * hz * 1.0017 / sr; ghostL -= std::floor (ghostL);
+                ghostR += 2.0 * hz * 0.9983 / sr; ghostR -= std::floor (ghostR);
+                // mezcla parcial de los dos lados: abre el estéreo sin perder el centro (compatible en mono)
+                ghostOutL = (0.7f * gl + 0.3f * gr) * harmGain * morph.ghost * 0.5f;
+                ghostOutR = (0.3f * gl + 0.7f * gr) * harmGain * morph.ghost * 0.5f;
+            }
         }
 
         // Parciales inarmónicos (osciladores seno por rotación)
@@ -455,6 +496,7 @@ public:
         if (released && m.hasLoop() && t > (double) m.times.back())
             modelGain *= (float) juce::jmax (0.0, 1.0 - (t - (double) m.times.back()) / tailFadeS);
         float l = (centre + pl + nz) * modelGain + trOut, r = (centre + pr + (width > 0.01f ? nzR : nz)) * modelGain + trOut;
+        if (morph.ghost > 0.0f) { l += ghostOutL * modelGain; r += ghostOutR * modelGain; }
 
         // Tono: inclina el brillo (+ más agudos, - más oscuro)
         tiltState += 0.12f * (0.5f * (l + r) - tiltState);
@@ -475,6 +517,11 @@ private:
     double sr = 44100.0, t = 0.0, phase = 0.0, hz = 220.0, trPos = 0.0, trStep = 0.0, dir = 1.0, phase2 = 0.37, phase3 = 0.71, roughPhase = 0.0;
     Genes genes;
     bool released = false;
+    Morph morph;
+    juce::Random morphRng;
+    double wanderPhase = 0.0, ghostL = 0.0, ghostR = 0.0;
+    float posSm = 0.0f, ghostOutL = 0.0f, ghostOutR = 0.0f;
+    bool posSmInit = false;
     static constexpr double tailFadeS = 0.03;
     float frame = 0.0f, position = 0.0f, harmGain = 0.0f, harmTarget = 0.0f, harmStep = 0.0f, tiltState = 0.0f;
     int rampLen = 16, numPartials = 0, haasPos = 0;

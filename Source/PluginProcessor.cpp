@@ -219,16 +219,75 @@ NebulaAudioProcessor::RecreateResult NebulaAudioProcessor::recreateFromSample()
 
 float NebulaAudioProcessor::similarityOfCurrentPatch()
 {
+    lastReport = measureSimilarity();
+    return lastReport.overall;
+}
+
+// Parecido honesto (ver Similarity.h): el patch actual tocado offline contra la sección del sample,
+// con las mismas métricas validadas del banco de pruebas.
+SimilarityReport NebulaAudioProcessor::measureSimilarity()
+{
     auto s = sampleSource.get();
-    if (s == nullptr) return -1.0f;
+    if (s == nullptr) return {};
+    const double sr = s->sampleRate;
+    const int n = s->length();
+    const int a0 = juce::jlimit (0, juce::jmax (0, n - 2), (int) (regionStart() * (float) n));
+    const int a1 = juce::jlimit (a0 + 2, n, (int) (regionEnd() * (float) n));
+    const float* x = s->data();
+    float peak = 0.0f;
+    for (int i = a0; i < a1; ++i) peak = juce::jmax (peak, std::abs (x[i]));
+    if (peak <= 0.0f) return {};
+    int onset = a0;
+    while (onset < a1 - 1 && std::abs (x[onset]) < peak * 0.003f) ++onset;   // -50 dB, como el análisis
+    onset = juce::jmax (a0, onset - (int) (0.005 * sr));
+    const int len = juce::jmin (a1 - onset, (int) (8.0 * sr));               // hasta 8 s (costo acotado)
+    if (len < (int) (0.05 * sr)) return {};
+    juce::AudioBuffer<float> ref (1, len);
+    ref.copyFrom (0, 0, x + onset, len);
+
     GenomeOps ops (*this, 1);
     OfflineSynth offline (getParameters(), ops.parameters(), tables);
-    offline.setModel (voiceCtx.models.get());
+    auto m = voiceCtx.models.get();
+    offline.setModel (m);
     Genome g;
     for (auto* p : ops.parameters()) g.genes.push_back (p->getValue());
-    auto m = voiceCtx.models.get();
+    offline.setGenome (g);
+
     const bool rs = m != nullptr && juce::roundToInt (state.getRawParameterValue (ParamID::engine)->load()) == Engine::Resynth;
-    return ImitationTools::similarity (offline, g, *s, regionStart(), regionEnd(), rootOffset(), rs ? m->rootNote : -1.0f);
+    const float exact = rs ? m->rootNote : (s->hasPitch ? s->rootNote + rootOffset() : 48.0f);
+    const int note = juce::jlimit (12, 115, juce::roundToInt (exact));
+    // la nota se suelta donde el original empieza a apagarse (si se conoce) o al 85 %
+    int hold = (int) (0.85 * len);
+    if (rs && m->hasLoop()) hold = juce::jlimit (1, len, (int) (m->releaseStart * sr));
+    else if (rs) hold = len;
+    juce::AudioBuffer<float> out;
+    offline.renderStereo (out, note, hold, len, sr);
+    juce::AudioBuffer<float> test (1, len);
+    test.copyFrom (0, 0, out, 0, 0, len);
+    if (out.getNumChannels() > 1) { test.addFrom (0, 0, out, 1, 0, len); test.applyGain (0.5f); }
+
+    // La tecla tocada no es exactamente la nota del sample (p. ej. E4 -43 ct): en vez de castigar al color por
+    // esa transposición, la referencia se lleva a la misma afinación (remuestreo cúbico)
+    const double ratio = std::exp2 ((note - exact) / 12.0);
+    if (std::abs (ratio - 1.0) > 1.0e-4)
+    {
+        const int newLen = juce::jmax (2, (int) (len / ratio));
+        juce::AudioBuffer<float> shifted (1, newLen);
+        const float* src = ref.getReadPointer (0);
+        auto at = [&] (int i) { return src[juce::jlimit (0, len - 1, i)]; };
+        for (int i = 0; i < newLen; ++i)
+        {
+            const double pos = i * ratio;
+            const int i0 = (int) pos; const float f = (float) (pos - i0);
+            const float y0 = at (i0 - 1), y1 = at (i0), y2 = at (i0 + 1), y3 = at (i0 + 2);
+            shifted.setSample (0, i, y1 + 0.5f * f * (y2 - y0 + f * (2.0f * y0 - 5.0f * y1 + 4.0f * y2 - y3 + f * (3.0f * (y1 - y2) + y3 - y0))));
+        }
+        ref = std::move (shifted);
+        test.setSize (1, juce::jmin (test.getNumSamples(), newLen), true);
+    }
+
+    const bool pitched = s->hasPitch && ! s->melodic;
+    return Similarity::measure (ref, test, sr, pitched, 0.0, exact < 48.0f ? 25.0 : 50.0);
 }
 
 juce::File NebulaAudioProcessor::exportMidi()
@@ -450,7 +509,8 @@ void NebulaAudioProcessor::applyImitationResult()
     if (! imitator.finished.load()) return;
     imitator.finished = false;
     garden.plantGenome (imitator.result());
-    lastSimilarity = imitator.similarity.load();
+    // el parecido que se muestra se mide igual que en RECREAR (el del optimizador es sólo su guía interna)
+    lastSimilarity = similarityOfCurrentPatch();
     markReference();
     ++imitationCount;
 }
@@ -561,7 +621,23 @@ void NebulaAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         os.processSamplesDown (block);
     }
 
+    // Protección: si algo produjo un valor no finito (NaN/inf), ese bloque sale en silencio y los efectos
+    // y el filtro de continua vuelven a cero (si no, el NaN quedaría circulando en la reverb o el delay)
+    auto finite = [&] (const juce::AudioBuffer<float>& b)
+    {
+        for (int ch = 0; ch < b.getNumChannels(); ++ch)
+        {
+            const float* d = b.getReadPointer (ch);
+            float acc = 0.0f;
+            for (int i = 0; i < n; ++i) acc += d[i] * 0.0f;   // NaN o inf * 0 = NaN
+            if (acc != 0.0f) return false;
+        }
+        return true;
+    };
+    if (! finite (buffer)) { buffer.clear(); ++nonFiniteBlocks; }
+
     fx.process (buffer, params, voiceCtx.bpm);
+    if (! finite (buffer)) { buffer.clear(); fx.reset(); ++nonFiniteBlocks; }
 
     // Quita cualquier corriente continua (DC) de la salida
     for (int ch = 0; ch < juce::jmin (2, buffer.getNumChannels()); ++ch)

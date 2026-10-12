@@ -6,6 +6,7 @@
 #include "DspParts.h"
 #include "ResynthModel.h"
 #include "Dna.h"
+#include "Transform.h"
 
 struct SynthSound : public juce::SynthesiserSound
 {
@@ -73,6 +74,7 @@ public:
         for (auto* e : { &ampEnv, &env2, &env3 }) e->setSampleRate (sampleRate);
         for (auto& f : filters) f.reset();
         rsPlayer.prepare (sampleRate);
+        tf.prepare (sampleRate);
     }
 
     // Deja la voz como recién creada (lo usa reset() en modo de azar reproducible)
@@ -99,6 +101,7 @@ public:
         abPos = 0.0;
         realTail = false; tailGain = 0.0f;
         lastL = lastR = declickL = declickR = 0.0f;
+        tf.reset (1); tfSemis = 0.0f; noteCounter = 0;
     }
 
     bool canPlaySound (juce::SynthesiserSound* s) override { return dynamic_cast<SynthSound*> (s) != nullptr; }
@@ -110,9 +113,13 @@ public:
         legatoPending = false;
 
         realTail = false;
+        // semilla propia de Cosmos/Abismo (no consume números del azar de la voz: lo demás suena igual)
+        juce::int64 tfSeed = (juce::int64) midiNote * 7919 + (juce::int64) (++noteCounter) * 104729;
         if (ctx.seededRandom.load())
         {
-            random.setSeed (VoiceContext::noteSeed (ctx.renderSeed.load(), ctx.noteOnCount.fetch_add (1), midiNote));
+            const auto ns = VoiceContext::noteSeed (ctx.renderSeed.load(), ctx.noteOnCount.fetch_add (1), midiNote);
+            random.setSeed (ns);
+            tfSeed = (juce::int64) (ns ^ 0x5DEECE66Dull);
             if (! legato)
             {
                 // la deriva analógica arranca en un punto de su recorrido normal (antes venía de la historia de la voz)
@@ -151,6 +158,9 @@ public:
             lfo2.noteOn (random);
             sample = ctx.samples.get();
             rsPlayer.start (ctx.models.get(), random);
+            rsPlayer.seedMorph (tfSeed ^ 0x2545F491);
+            tf.reset (tfSeed);
+            tfSemis = 0.0f;
             noteDrift = random.nextFloat() * 2.0f - 1.0f;
             abPos = 0.0;
             playhead = 0.0;
@@ -257,6 +267,7 @@ public:
 
             float L = 0.0f, R = 0.0f;
             generate (L, R);
+            tf.process (L, R);   // Cosmos / Abismo (no hace nada en el centro)
 
             // Filtros
             if (f2On)
@@ -325,6 +336,16 @@ private:
         {
             // ADN: genes en tiempo real y, si cambió la variante del modelo (genes estructurales), cambiarla en vivo
             const auto d = Dna::readRealtime (params);
+            {
+                ResynthPlayer::Morph mo;
+                const auto ta = Transform::make (params[P::transform], params[P::identity], params[P::transformOut]);
+                const float keep = 1.0f - ta.identity;
+                mo.speedMul = 1.0f - 0.6f * ta.cosmos * keep;
+                mo.wander = 0.12f * ta.cosmos * keep;
+                mo.ghost = 0.6f * ta.cosmos * keep;
+                mo.jumps = 7.0f * ta.abyss * ta.abyss * keep;
+                rsPlayer.setMorph (mo);
+            }
             ResynthPlayer::Genes g;
             g.pitchDepth = d.pitchDepth; g.attack = d.attack; g.release = d.release; g.transient = d.transient;
             g.noiseTilt = d.noiseTilt; g.rough = d.rough; g.density = d.density; g.freeze = d.freeze;
@@ -332,6 +353,7 @@ private:
             auto latest = ctx.models.get();
             if (latest.get() != rsPlayer.current()) rsPlayer.swapModel (std::move (latest));
         }
+        tfAmounts = Transform::make (params[P::transform], params[P::identity], params[P::transformOut]);
         osc1On = params[P::osc1On] > 0.5f; osc2On = params[P::osc2On] > 0.5f;
         subOn = params[P::subOn] > 0.5f;   noiseOn = params[P::noiseOn] > 0.5f;
         f1On = params[P::f1On] > 0.5f;
@@ -424,7 +446,9 @@ private:
                          + (mpe ? ctx.masterBend.load() * (float) params.i (P::bendRange) : 0.0f);
         const float vib = l1 * params[P::lfoPitch] / 100.0f * (1.0f + 2.0f * move) + l2 * move * 0.15f;
         const float drift = analog * (0.08f * driftA + 0.05f * noteDrift);
-        const float pitch = currentNote + bend + vib + m[ModDst::Pitch] * 12.0f + drift + chaos * chaos * 0.8f * chaosVal;
+        // Cosmos/Abismo: deriva lenta o caos por pasos de la afinación (0 si no se transforma)
+        tfSemis = tf.control (tfAmounts, noteHz (currentNote), controlRate);
+        const float pitch = currentNote + bend + vib + m[ModDst::Pitch] * 12.0f + drift + chaos * chaos * 0.8f * chaosVal + tfSemis;
 
         shape1   = juce::jlimit (0.0f, 1.0f, params[P::osc1Shape] + m[ModDst::Shape1]);
         shape2   = juce::jlimit (0.0f, 1.0f, params[P::osc2Shape] + m[ModDst::Shape2]);
@@ -788,6 +812,10 @@ private:
 
     // v3
     ResynthPlayer rsPlayer;
+    TransformVoice tf;
+    Transform::Amounts tfAmounts;
+    float tfSemis = 0.0f;
+    juce::int64 noteCounter = 0;
     int engine = 0;
     bool resynth = false, osc1On = true, osc2On = true, subOn = true, noiseOn = true, f1On = true;
     float timbre = 0.0f, noteDrift = 0.0f, driftA = 0.0f, driftB = 0.0f;

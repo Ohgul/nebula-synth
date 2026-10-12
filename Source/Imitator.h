@@ -273,11 +273,14 @@ private:
             for (int s = 0; s < ModSrc::count; ++s)
                 for (int d = 0; d < ModDst::count; ++d) ops.setReal (g, matrixID (s, d), 0.0f);
             add (g);
-            for (int k = 0; k < 6; ++k) add (ops.mutate (g, 0.25f, false));
+            for (int k = 0; k < 6; ++k) { if (threadShouldExit()) return; add (ops.mutate (g, 0.25f, false)); }
         }
         const auto& presets = factoryPresets();
         for (int p = 0; p < (int) presets.size(); ++p)
+        {
+            if (threadShouldExit()) return;   // cancelar responde enseguida también al principio
             add (presetGenome (p));
+        }
         while ((int) pop.size() < elites + childrenPerGeneration)
         {
             Genome g = presetGenome (ops.random().nextInt ((int) presets.size()));

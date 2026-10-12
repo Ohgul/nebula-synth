@@ -85,7 +85,7 @@ public:
             // Decisiones del usuario: encendidos, macros, efectos y la curva de tono no mutan
             if (id.endsWith ("On") || id.startsWith ("macro") || id.startsWith ("fx") || id == ParamID::rsPitch) continue;
             // El ADN y Cosmos/Abismo tienen su propia mutación (con semilla y candados)
-            if (id.startsWith ("dna") || id == ParamID::transform || id == ParamID::identity) continue;
+            if (id.startsWith ("dna") || id == ParamID::transform || id == ParamID::identity || id == ParamID::transformOut) continue;
 
             auto chance = [&] (float x) { return rng.nextFloat() < amt * x; };
             auto setIdx = [&] (float realValue) { v = p->convertTo0to1 (realValue); };
@@ -182,8 +182,13 @@ public:
     {
         if (real (g, ParamID::ampS) < 0.05f && real (g, ParamID::ampD) < 0.08f)
             setReal (g, ParamID::ampD, 0.25f);
-        if (real (g, ParamID::ampA) > 1.5f)
-            setReal (g, ParamID::ampA, 1.5f);
+        // ataque de 1 s como máximo: con más, una nota corta casi no se oye y el brote parece mudo
+        // (la curva cuenta: con curva muy negativa el ataque arranca lentísimo y tarda mucho más en oírse)
+        {
+            const float slow = 1.0f + 3.0f * juce::jmax (0.0f, -real (g, ParamID::ampCurve));
+            if (real (g, ParamID::ampA) * slow > 1.0f)
+                setReal (g, ParamID::ampA, 1.0f / slow);
+        }
 
         // Filtro 1
         {
@@ -197,6 +202,11 @@ public:
                 const float peakCut = cut * std::pow (2.0f, juce::jmax (0.0f, env) * 6.0f);
                 if (sustainCut < 300.0f && peakCut < 900.0f)
                     setReal (g, ParamID::cutoff, juce::jmin (20000.0f, cut * 400.0f / juce::jmax (1.0f, sustainCut)));
+                // envolvente negativa: en su punto más cerrado el filtro no debe bajar de ~150 Hz (si no, el
+                // golpe del volumen ocurre con el filtro cerrado y el brote queda mudo)
+                const float c2 = real (g, ParamID::cutoff);
+                if (env < 0.0f && c2 * std::pow (2.0f, env * 6.0f) < 150.0f)
+                    setReal (g, ParamID::filterEnv, juce::jmin (0.0f, -std::log2 (juce::jmax (150.0f, c2) / 150.0f) / 6.0f));
             }
             if (ft == 2)
             {
