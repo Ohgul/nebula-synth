@@ -412,6 +412,35 @@ namespace Forge
         add ("L8", "Sierra + sub + ruido", Wave::Saw, [] (SynthPatch& p, const ReferenceFeatures& f)
              { p.set (ParamID::subOn, 1); p.set (ParamID::subLevel, 0.2f); p.set (ParamID::noiseOn, 1); p.set (ParamID::noise, f.noiseDb > -20.0 ? 0.15f : 0.04f); },
              { ParamID::subLevel, ParamID::noise });
+        // FORGE 2.0: familias inarmónicas usando la FM nativa del motor.
+        // No se añade todavía un nuevo DSP; los patches siguen siendo compatibles.
+        add ("L9", "Campana FM inarmonica", Wave::Sine, [] (SynthPatch& p, const ReferenceFeatures&)
+             { p.set (ParamID::osc2On, 1); p.set (ParamID::osc2Wave, (float) Wave::Sine);
+               p.set (ParamID::osc2Semi, 6); p.set (ParamID::osc2Fine, 17.0f);
+               p.set (ParamID::oscMix, 0.0f); p.set (ParamID::fmAmount, 0.42f);
+               p.set (ParamID::cutoff, 18000.0f); p.set (ParamID::filterEnv, 0.0f); },
+             { ParamID::fmAmount, ParamID::osc2Semi, ParamID::osc2Fine });
+        add ("L10", "Campana FM octava", Wave::Sine, [] (SynthPatch& p, const ReferenceFeatures&)
+             { p.set (ParamID::osc2On, 1); p.set (ParamID::osc2Wave, (float) Wave::Sine);
+               p.set (ParamID::osc2Semi, 19); p.set (ParamID::osc2Fine, 0.0f);
+               p.set (ParamID::oscMix, 0.0f); p.set (ParamID::fmAmount, 0.36f);
+               p.set (ParamID::cutoff, 18000.0f); p.set (ParamID::filterEnv, 0.0f); },
+             { ParamID::fmAmount, ParamID::osc2Semi, ParamID::osc2Fine });
+        add ("L11", "Campana FM percusiva", Wave::Sine, [] (SynthPatch& p, const ReferenceFeatures& f)
+             { p.set (ParamID::osc2On, 1); p.set (ParamID::osc2Wave, (float) Wave::Sine);
+               p.set (ParamID::osc2Semi, 6); p.set (ParamID::osc2Fine, 17.0f);
+               p.set (ParamID::oscMix, 0.0f); p.set (ParamID::fmAmount, 0.18f);
+               p.set (ParamID::fltA, 0.001f); p.set (ParamID::fltD, (float) juce::jlimit (0.02, 1.5, f.decayS * 0.5));
+               p.set (ParamID::fltS, 0.0f); p.setMod (ModSrc::Env2, ModDst::Fm, 0.6f);
+               p.set (ParamID::cutoff, 18000.0f); p.set (ParamID::filterEnv, 0.0f); },
+             { ParamID::fmAmount, ParamID::osc2Semi, ParamID::osc2Fine, ParamID::fltD,
+               matrixID (ModSrc::Env2, ModDst::Fm) });
+        add ("L12", "Campana FM grave", Wave::Sine, [] (SynthPatch& p, const ReferenceFeatures&)
+             { p.set (ParamID::osc2On, 1); p.set (ParamID::osc2Wave, (float) Wave::Sine);
+               p.set (ParamID::osc2Semi, -5); p.set (ParamID::osc2Fine, 17.0f);
+               p.set (ParamID::oscMix, 0.0f); p.set (ParamID::fmAmount, 0.5f);
+               p.set (ParamID::cutoff, 18000.0f); p.set (ParamID::filterEnv, 0.0f); },
+             { ParamID::fmAmount, ParamID::osc2Semi, ParamID::osc2Fine });
         return a;
     }
 
