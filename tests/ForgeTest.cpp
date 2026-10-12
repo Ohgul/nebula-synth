@@ -116,6 +116,27 @@ int NEBULA_TEST_ENTRY (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI gui;
     const Bench::Variant v {};
+    // FORGE 2.0: las nuevas semillas FM deben existir, sonar y cubrir
+    // varias relaciones inarmónicas sin introducir muestras no finitas.
+    {
+        const auto arch = Forge::leadArchitectures();
+        const auto ref = Forge::analyse (Bench::lead (v).audio, sr, "fm-architectures");
+        Forge::PatchRenderer renderer;
+        int fmCount = 0;
+        bool allFinite = true;
+        for (const auto& a : arch)
+            if (a.key == "L9" || a.key == "L10" || a.key == "L11" || a.key == "L12")
+            {
+                ++fmCount;
+                const auto p = a.estimate (ref);
+                const auto audio = renderer.render (p, 69, 0.4, 0.8, sr);
+                float peak = 0.0f;
+                allFinite = allFinite && p.get (ParamID::fmAmount) > 0.0f
+                    && safe (audio, peak);
+            }
+        check ("FORGE 2.0: cuatro arquitecturas FM audibles", fmCount == 4 && allFinite,
+               juce::String (fmCount) + " semillas");
+    }
     // FORGE 2.0: una cola cortada debe perder frente a una referencia idéntica.
     // Evalúa el mismo audio con y sin los últimos 300 ms: protege el término
     // temporal añadido a fastLoss sin depender de la búsqueda estocástica.
