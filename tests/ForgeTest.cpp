@@ -116,6 +116,24 @@ int NEBULA_TEST_ENTRY (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI gui;
     const Bench::Variant v {};
+    // FORGE 2.0: una cola cortada debe perder frente a una referencia idéntica.
+    // Evalúa el mismo audio con y sin los últimos 300 ms: protege el término
+    // temporal añadido a fastLoss sin depender de la búsqueda estocástica.
+    {
+        auto pad = Bench::lead (v);
+        auto ref = Forge::analyse (pad.audio, sr, "tail-regression");
+        Forge::Evaluator evaluator (ref);
+        const auto& original = ref.tuned;
+        juce::AudioBuffer<float> truncated (original);
+        const int cut = juce::jmax (0, truncated.getNumSamples() - (int) (0.3 * sr));
+        for (int ch = 0; ch < truncated.getNumChannels(); ++ch)
+            truncated.clear (ch, cut, truncated.getNumSamples() - cut);
+        const double intactLoss = evaluator.fastLoss (original);
+        const double truncatedLoss = evaluator.fastLoss (truncated);
+        check ("FORGE 2.0: penaliza recorte de cola", std::isfinite (intactLoss)
+               && std::isfinite (truncatedLoss) && truncatedLoss > intactLoss,
+               juce::String (intactLoss, 3) + " -> " + juce::String (truncatedLoss, 3));
+    }
 
     if (argc > 1 && juce::String (argv[1]) == "tiempo")
     {
@@ -196,6 +214,91 @@ int NEBULA_TEST_ENTRY (int argc, char** argv)
         return 0;
     }
 
+    // ---- Comparación de optimizadores con el mismo presupuesto (P3: CMA-ES contra búsqueda local) ----
+    if (argc > 1 && juce::String (argv[1]) == "optimizadores")
+    {
+        struct S { const char* name; Bench::Sound s; };
+        std::vector<S> sounds { { "808", Bench::bass808 (0, v) }, { "lead", Bench::lead (v) }, { "pluck", Bench::pluck (v) } };
+        for (auto& s : sounds)
+        {
+            const auto f = Forge::analyse (s.s.audio, sr, s.name);
+            for (int mode = 0; mode < 2; ++mode)
+                for (juce::int64 seed : { 1, 2, 3 })
+                {
+                    Forge::SearchSettings st; st.seed = seed; st.dataset = Forge::builtInDataset();
+                    st.optimizer = mode == 0 ? Forge::SearchSettings::Optimizer::CmaThenLocal : Forge::SearchSettings::Optimizer::Local;
+                    // mismo presupuesto por semilla: CMA 44 + pulido 12 = local 56
+                    st.evaluationsPerArchitecture = st.cmaBudget + st.polishBudget;
+                    Forge::Searcher sr0 (f);
+                    const auto t0 = juce::Time::getMillisecondCounterHiRes();
+                    const auto list = sr0.run (st);
+                    float mean = 0; for (auto& k : list) mean += k.fidelity.overall;
+                    std::printf ("%-6s %-10s semilla %d: mejor %3.0f%%  media %3.0f%%  perdida final %.2f  %d evals  %.1f s\n", s.name, mode == 0 ? "CMA+local" : "local",
+                                 (int) seed, list.empty() ? 0.0f : list[0].fidelity.overall * 100, list.empty() ? 0.0f : mean / list.size() * 100,
+                                 sr0.diagnostics.bestFinalLoss, sr0.evaluations, (juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0);
+                }
+        }
+        return 0;
+    }
+
+    // ---- INTERNAL_RECOVERY: patches de prueba del índice (ocultos para la búsqueda) -> FORGE -> fidelidad ----
+    //   NebulaTests Forge recuperacion [porCategoria=2] [semillas=2]
+    if (argc > 1 && juce::String (argv[1]) == "recuperacion")
+    {
+        const int perCat = argc > 2 ? juce::jmax (1, juce::String (argv[2]).getIntValue()) : 2;
+        const int nSeeds = argc > 3 ? juce::jmax (1, juce::String (argv[3]).getIntValue()) : 2;
+        const auto* db = Forge::builtInDataset();
+        if (db == nullptr) { std::printf ("sin base de patches\n"); return 1; }
+        Forge::PatchRenderer r;
+        double sumFid = 0, sumSecs = 0, sumSpread = 0, sumParam = 0, sumRandParam = 0; int n = 0;
+        juce::Random rr (4242);
+        for (int c = 0; c < (int) Forge::Category::count; ++c)
+        {
+            int taken = 0;
+            for (auto& e : db->entries)
+            {
+                if ((int) e.category != c || e.split != 0) continue;
+                if (taken++ >= perCat) break;
+                const auto& spec = Forge::specFor (e.category);
+                const auto hidden = e.patch();
+                const auto audio = r.render (hidden, spec.note, spec.holdS, spec.totalS, sr);
+                const auto f = Forge::analyse (audio, sr, "oculto");
+                float best = 0, worst = 1; double secs = 0, pd = 0; int evals = 0;
+                for (int s = 1; s <= nSeeds; ++s)
+                {
+                    Forge::SearchSettings st; st.seed = s; st.dataset = db;    // máscara por defecto: sin la partición de prueba
+                    Forge::Searcher search (f);
+                    const auto t0 = juce::Time::getMillisecondCounterHiRes();
+                    const auto list = search.run (st);
+                    secs += (juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0;
+                    evals += search.evaluations;
+                    const float fid = list.empty() ? 0.0f : list[0].fidelity.overall;
+                    best = juce::jmax (best, fid); worst = juce::jmin (worst, fid);
+                    if (s == 1 && ! list.empty())
+                    {
+                        const auto& ids = db->variedParams (e.category);
+                        for (int i : ids) pd += std::abs (list[0].patch.getNorm (Forge::synthParams()[(size_t) i].id) - hidden.getNorm (Forge::synthParams()[(size_t) i].id));
+                        pd /= juce::jmax ((size_t) 1, ids.size());
+                    }
+                }
+                // referencia de distancia: otro patch de la misma categoría al azar
+                double rd = 0;
+                {
+                    auto other = Forge::samplePatch (e.category, rr);
+                    const auto& ids = db->variedParams (e.category);
+                    for (int i : ids) rd += std::abs (other.getNorm (Forge::synthParams()[(size_t) i].id) - hidden.getNorm (Forge::synthParams()[(size_t) i].id));
+                    rd /= juce::jmax ((size_t) 1, ids.size());
+                }
+                std::printf ("%-13s semilla %u  fidelidad %3.0f%% (peor semilla %3.0f%%)  dist. parametros %.3f (azar %.3f)  %.1f s/busqueda  %d evaluaciones  ref %.2f s\n",
+                             Forge::categoryName (e.category), (unsigned) e.seed, best * 100, worst * 100, pd, rd, secs / nSeeds, evals / nSeeds, f.lengthS);
+                sumFid += best; sumSpread += best - worst; sumSecs += secs / nSeeds; sumParam += pd; sumRandParam += rd; ++n;
+            }
+        }
+        std::printf ("\nRECUPERACION INTERNA: %d patches ocultos, fidelidad media %.1f %%, variacion entre semillas %.1f puntos, distancia de parametros %.3f (azar %.3f), %.1f s por busqueda\n",
+                     n, 100 * sumFid / juce::jmax (1, n), 100 * sumSpread / juce::jmax (1, n), sumParam / juce::jmax (1, n), sumRandParam / juce::jmax (1, n), sumSecs / juce::jmax (1, n));
+        return 0;
+    }
+
     // ---- 0. El patch es datos: guardar/cargar el formato, y lo que queda fuera de la receta ----
     {
         auto p = Forge::SynthPatch::init();
@@ -229,18 +332,35 @@ int NEBULA_TEST_ENTRY (int argc, char** argv)
         const auto list = p->forgeCandidates();
         const auto ref = p->forgeReference();
         std::printf ("   referencia: %s\n", ref.summary().toRawUTF8());
+        std::printf ("   busqueda: %s\n", p->forgeDiagnosticsText().toRawUTF8());
         for (auto& w : ref.warnings) std::printf ("   aviso: %s\n", w.toRawUTF8());
         for (auto& k : list)
-            std::printf ("   %-5s %3.0f%%  color %.2f dB  env %.2f dB  tono %.1f ct  golpe %.1f dB  cx %d  cpu %.1f%%  %s | %s\n", k.id.toRawUTF8(), k.fidelity.overall * 100,
+            std::printf ("   %-6s %-11s desde %3.0f%% -> %3.0f%%  color %.2f dB  env %.2f dB  tono %.1f ct  golpe %.1f dB  cx %d  cpu %.1f%%  %s | %s\n", k.id.toRawUTF8(), k.source.toRawUTF8(), k.initialFidelity * 100, k.fidelity.overall * 100,
                          k.fidelity.colorDb, k.fidelity.envelopeDb, k.fidelity.pitchCents, k.fidelity.attackDb, k.complexity, k.cpuPercent,
                          k.patch.architecture.toRawUTF8(), k.structure.toRawUTF8());
         check (c.name + ": 8 candidatos", list.size() >= 8, juce::String ((int) list.size()) + " en " + juce::String (secs, 1) + " s");
-        juce::StringArray archs; for (auto& k : list) archs.addIfNotAlreadyThere (k.patch.architecture);
-        check (c.name + ": candidatos distintos (al menos 5 recetas)", archs.size() >= 5, juce::String (archs.size()) + " arquitecturas");
+        juce::StringArray archs, structs; for (auto& k : list) { archs.addIfNotAlreadyThere (k.patch.architecture); structs.addIfNotAlreadyThere (Forge::structureKey (k.patch)); }
+        check (c.name + ": candidatos distintos (al menos 5 estructuras de receta)", structs.size() >= 5,
+               juce::String (structs.size()) + " estructuras, " + juce::String (archs.size()) + " arquitecturas de partida");
         bool ordered = true; for (size_t i = 1; i < list.size(); ++i) if (list[i].fidelity.overall > list[i - 1].fidelity.overall + 0.021f) ordered = false;
         check (c.name + ": ordenados por fidelidad medida", ordered);
         if (list.empty()) continue;
         check (c.name + ": fidelidad del mejor", list[0].fidelity.overall >= c.minFidelity, juce::String (list[0].fidelity.overall * 100, 0) + " %");
+        {
+            // AT004: optimizar mejora la similitud medida (fidelidad completa, no la pérdida interna)
+            int improved = 0, worse = 0; float bestStart = 0, bestEnd = 0;
+            for (auto& k : list)
+            {
+                if (k.fidelity.overall > k.initialFidelity + 0.005f) ++improved;
+                if (k.fidelity.overall < k.initialFidelity - 0.02f) ++worse;
+                bestStart = juce::jmax (bestStart, k.initialFidelity); bestEnd = juce::jmax (bestEnd, k.fidelity.overall);
+            }
+            check (c.name + ": AT004 optimizar mejora la fidelidad medida", bestEnd > bestStart + 0.01f && worse == 0 && improved >= (int) list.size() / 2,
+                   "mejor punto de partida " + juce::String (bestStart * 100, 0) + " % -> " + juce::String (bestEnd * 100, 0) + " %, mejoran " + juce::String (improved)
+                   + " de " + juce::String ((int) list.size()) + ", empeoran " + juce::String (worse));
+            int fromIndex = 0; for (auto& k : list) if (k.source == "indice") ++fromIndex;
+            check (c.name + ": el indice aporta candidatos", fromIndex > 0, juce::String (fromIndex) + " de " + juce::String ((int) list.size()));
+        }
 
         // Determinismo de la búsqueda
         {
@@ -338,8 +458,8 @@ int NEBULA_TEST_ENTRY (int argc, char** argv)
             check (c.name + ": gen de FM agrega armonicos", c1 > c0 + 1.5, juce::String (c0, 1) + " -> " + juce::String (c1, 1) + " bandas mel");
         }
         {
-            const auto flat = edited ([] (Forge::SynthPatch& q) { q.set (ParamID::noiseOn, 0); q.setMod (ModSrc::Env2, ModDst::Pitch, 0.0f); q.set (ParamID::fltA, 0.001f); q.set (ParamID::fltD, 0.15f); q.set (ParamID::fltS, 0.0f); });
-            const auto drop = edited ([] (Forge::SynthPatch& q) { q.set (ParamID::noiseOn, 0); q.setMod (ModSrc::Env2, ModDst::Pitch, 0.7f); q.set (ParamID::fltA, 0.001f); q.set (ParamID::fltD, 0.15f); q.set (ParamID::fltS, 0.0f); });
+            const auto flat = edited ([] (Forge::SynthPatch& q) { q.set (ParamID::noiseOn, 0); q.setMod (ModSrc::Env2, ModDst::Pitch, 0.0f); q.set (ParamID::fltA, 0.001f); q.set (ParamID::fltD, 0.3f); q.set (ParamID::fltS, 0.0f); });
+            const auto drop = edited ([] (Forge::SynthPatch& q) { q.set (ParamID::noiseOn, 0); q.setMod (ModSrc::Env2, ModDst::Pitch, 1.0f); q.set (ParamID::fltA, 0.001f); q.set (ParamID::fltD, 0.3f); q.set (ParamID::fltS, 0.0f); });
             // frecuencia de los primeros 60 ms por cruces por cero
             auto zcHz = [] (const juce::AudioBuffer<float>& b)
             {

@@ -110,7 +110,7 @@ int NEBULA_TEST_ENTRY (int argc, char** argv)
     auto& st = proc->state;
     auto set = [&] (const juce::String& id, float v) { auto* p = st.getParameter (id); jassert (p != nullptr); p->setValueNotifyingHost (p->convertTo0to1 (v)); };
 
-    constexpr double pi2 = juce::MathConstants<double>::twoPi;
+    static constexpr double pi2 = juce::MathConstants<double>::twoPi;
 
     // ================= Recrear: muchos tipos de sonido =================
     // minSim: el parecido honesto (Similarity.h, mismas métricas del banco) que hoy se alcanza, con un margen:

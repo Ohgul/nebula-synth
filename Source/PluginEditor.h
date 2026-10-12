@@ -23,6 +23,7 @@ public:
 
     std::function<void (float)> onZoom;
     void showTab (int tab);
+    void showWorkspace (int w);          // 0 DESCUBRIR, 1 CREAR, 2 TRANSFORMAR
     void setZoomChoice (float z);
     void mouseDown (const juce::MouseEvent&) override;   // cada clic abre un paso nuevo de "deshacer"
 
@@ -34,6 +35,7 @@ private:
 
     NebulaAudioProcessor& proc;
     std::array<std::unique_ptr<IconButton>, 4> tabs;
+    std::array<std::unique_ptr<IconButton>, 3> workspaces;
     juce::ComboBox presetBox, zoomBox;
     IconButton prevButton { "", Icons::chevronLeft(), "Sonido anterior" }, nextButton { "", Icons::chevronRight(), "Sonido siguiente" },
                saveButton { "", Icons::save(), "Guardar tu sonido como preset" },
@@ -58,9 +60,12 @@ private:
     CleanerPanel cleanerPanel;
     DnaPanel dnaPanel;
     ForgePanel forgePanel;
+    TransformView transformView;
+    juce::String footerText;
+    juce::Rectangle<int> footerArea;
     juce::MidiKeyboardComponent keyboard;
 
-    int currentTab = 0;
+    int currentTab = 0, currentWorkspace = 1;
     juce::StringArray userPresets;
     std::unique_ptr<juce::AlertWindow> saveDialog;
 };

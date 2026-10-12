@@ -460,7 +460,7 @@ public:
     void resized() override
     {
         auto r = getLocalBounds();
-        constexpr int gap = 10;
+        static constexpr int gap = 10;
         rTransform = r.removeFromBottom (juce::jmin (130, r.getHeight() / 4));
         r.removeFromBottom (gap);
         transform.setBounds (rTransform.reduced (16, 0).withTrimmedTop (30).withTrimmedBottom (24));

@@ -16,8 +16,8 @@ int NEBULA_TEST_ENTRY (int argc, char** argv)
     const juce::File outDir (argc > 1 ? juce::String (argv[1]) : juce::File::getCurrentWorkingDirectory().getFullPathName());
     outDir.createDirectory();
 
-    constexpr double sr = 48000.0;
-    constexpr int block = 512;
+    static constexpr double sr = 48000.0;
+    static constexpr int block = 512;
 
     std::unique_ptr<NebulaAudioProcessor> proc (dynamic_cast<NebulaAudioProcessor*> (createPluginFilter()));
     proc->setPlayConfigDetails (0, 2, sr, block);

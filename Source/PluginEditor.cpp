@@ -5,7 +5,7 @@ using namespace NebulaColours;
 
 //==============================================================================
 NebulaContent::NebulaContent (NebulaAudioProcessor& p)
-    : proc (p), garden (p), edit (p), mod (p), fxView (p), macros (p), browser (p), sampleEditor (p), drawPanel (p), recipePanel (p), cleanerPanel (p), dnaPanel (p), forgePanel (p),
+    : proc (p), garden (p), edit (p), mod (p), fxView (p), macros (p), browser (p), sampleEditor (p), drawPanel (p), recipePanel (p), cleanerPanel (p), dnaPanel (p), forgePanel (p), transformView (p),
       keyboard (p.keyboardState, juce::MidiKeyboardComponent::horizontalKeyboard)
 {
     const char* names[] { "Cerebro", "Editar", "Modulacion", "Efectos" };
@@ -20,6 +20,21 @@ NebulaContent::NebulaContent (NebulaAudioProcessor& p)
         tabs[(size_t) i]->horizontal = true;
         tabs[(size_t) i]->onClick = [this, i] { showTab (i); };
         addAndMakeVisible (*tabs[(size_t) i]);
+    }
+
+    // Espacios de trabajo (0.4.0): DESCUBRIR (FORGE), CREAR (el sinte de siempre), TRANSFORMAR (Cosmos/Abismo)
+    const char* wsNames[] { "DESCUBRIR", "CREAR", "TRANSFORMAR" };
+    const juce::Path wsIcons[] { Icons::wand(), Icons::sliders(), Icons::sparkle() };
+    const char* wsTips[] { "Descubrir: FORGE busca recetas nativas para tu sample; mutar, cruzar y candados",
+                           "Crear: Cerebro, edicion, modulacion y efectos",
+                           "Transformar: Cosmos/Abismo sobre la receta (reversible) y sobre el audio" };
+    for (int i = 0; i < 3; ++i)
+    {
+        workspaces[(size_t) i] = std::make_unique<IconButton> (wsNames[i], wsIcons[i], wsTips[i]);
+        workspaces[(size_t) i]->horizontal = true;
+        workspaces[(size_t) i]->colour = i == 2 ? abyss.interpolatedWith (cosmos, 0.5f) : cosmos;
+        workspaces[(size_t) i]->onClick = [this, i] { showWorkspace (i); };
+        addAndMakeVisible (*workspaces[(size_t) i]);
     }
 
     rebuildPresetMenu();
@@ -57,6 +72,8 @@ NebulaContent::NebulaContent (NebulaAudioProcessor& p)
     addChildComponent (cleanerPanel);
     addChildComponent (dnaPanel);
     addChildComponent (forgePanel);
+    addChildComponent (transformView);
+    forgePanel.onClose = [this] { showWorkspace (1); };
 
     garden.onOpenSampleEditor = [this] { sampleEditor.open(); };
     garden.framesForWave = [this] { return sampleEditor.framesChoice(); };
@@ -65,7 +82,7 @@ NebulaContent::NebulaContent (NebulaAudioProcessor& p)
     garden.onOpenCleaner = [this] { cleanerPanel.open(); };
     garden.onOpenRecipe  = [this] { recipePanel.open(); };
     garden.onOpenDna     = [this] { dnaPanel.open(); };
-    garden.onOpenForge   = [this] { forgePanel.open(); };
+    garden.onOpenForge   = [this] { showWorkspace (0); };
     edit.onOpenCleaner   = [this] { cleanerPanel.open(); };
     edit.onOpenDna       = [this] { dnaPanel.open(); };
 
@@ -82,6 +99,7 @@ NebulaContent::NebulaContent (NebulaAudioProcessor& p)
 
     setSize (designW, designH);
     showTab (0);
+    showWorkspace (1);
     addMouseListener (this, true);
     startTimerHz (20);
 }
@@ -93,13 +111,25 @@ void NebulaContent::setZoomChoice (float z)
         if (std::abs (zs[i] - z) < 0.01f) zoomBox.setSelectedId (i + 1, juce::dontSendNotification);
 }
 
+void NebulaContent::showWorkspace (int w)
+{
+    currentWorkspace = juce::jlimit (0, 2, w);
+    for (int i = 0; i < 3; ++i) workspaces[(size_t) i]->setToggleState (i == currentWorkspace, juce::dontSendNotification);
+    for (auto& t : tabs) t->setVisible (currentWorkspace == 1);
+    if (currentWorkspace == 0) forgePanel.open(); else forgePanel.setVisible (false);
+    transformView.setVisible (currentWorkspace == 2);
+    showTab (currentTab);
+    resized();
+}
+
 void NebulaContent::showTab (int tab)
 {
     currentTab = tab;
-    garden.setVisible (tab == 0);
-    edit.setVisible (tab == 1);
-    mod.setVisible (tab == 2);
-    fxView.setVisible (tab == 3);
+    const bool create = currentWorkspace == 1;
+    garden.setVisible (create && tab == 0);
+    edit.setVisible (create && tab == 1);
+    mod.setVisible (create && tab == 2);
+    fxView.setVisible (create && tab == 3);
     neural.intensity = tab == 0 ? 1.0f : 0.15f;
     for (int i = 0; i < 4; ++i) tabs[(size_t) i]->setToggleState (i == tab, juce::dontSendNotification);
     repaint();
@@ -181,6 +211,21 @@ void NebulaContent::timerCallback()
 
     if (bgCounter % 10 == 0)
     {
+        // pie: qué suena y de dónde salió
+        const auto patch = proc.currentSynthPatch();
+        juce::String f;
+        if (auto* e = proc.state.getParameter (ParamID::engine)) f << "Motor: " << e->getCurrentValueAsText();
+        f << "   |   Receta: " << patch.name << " (" << patch.origin << ")";
+        const auto cands = proc.forgeCandidates();
+        if (! cands.empty()) f << "   |   FORGE: " << (int) cands.size() << " candidatos, generacion " << cands.front().generation;
+        if (proc.recipePolarityActive())
+        {
+            const float a = proc.recipePolarity();
+            f << "   |   " << (a >= 0 ? "Cosmos " : "Abismo ") << juce::roundToInt (std::abs (a) * 100) << " % sobre la receta";
+        }
+        const auto locks = proc.forgeLocks();
+        if (locks.count() > 0) f << "   |   Candados: " << locks.toString();
+        if (f != footerText) { footerText = f; repaint (footerArea); }
         if (proc.userPresetNames() != userPresets) rebuildPresetMenu();
         const int idx = proc.getPresetIndex();
         if (! presetBox.isPopupActive())
@@ -208,19 +253,29 @@ void NebulaContent::paint (juce::Graphics& g)
     g.fillEllipse (18.0f - d * 0.5f, 27.0f - d * 0.5f, d, d);
     g.setColour (textDim);
     g.setFont (juce::FontOptions (10.0f));
-    g.drawText ("v3", 152, 15, 30, 14, juce::Justification::centredLeft);
+    g.drawText ("v" + juce::String (NEBULA_VERSION_STRING), 152, 15, 50, 14, juce::Justification::centredLeft);
     // línea fina bajo el encabezado
     g.setColour (panelEdge.withAlpha (0.7f));
     g.fillRect (14, 53, getWidth() - 28, 1);
+    // pie
+    g.setColour (panel.withAlpha (0.9f));
+    g.fillRect (footerArea);
+    g.setColour (panelEdge.withAlpha (0.7f));
+    g.fillRect (footerArea.getX(), footerArea.getY(), footerArea.getWidth(), 1);
+    g.setColour (textDim);
+    g.setFont (juce::FontOptions (10.5f));
+    g.drawText (footerText, footerArea.reduced (14, 0), juce::Justification::centredLeft);
 }
 
 void NebulaContent::resized()
 {
-    auto r = getLocalBounds().reduced (14, 0);
+    auto all = getLocalBounds();
+    footerArea = all.removeFromBottom (20);
+    auto r = all.reduced (14, 0);
     auto header = r.removeFromTop (54);
-    header.removeFromLeft (160);
-    auto tabArea = header.removeFromLeft (452).withSizeKeepingCentre (452, 34);
-    for (auto& t : tabs) t->setBounds (tabArea.removeFromLeft (113).reduced (2, 0));
+    header.removeFromLeft (190);
+    auto wsArea = header.removeFromLeft (390).withSizeKeepingCentre (390, 32);
+    for (auto& w : workspaces) w->setBounds (wsArea.removeFromLeft (130).reduced (2, 0));
 
     auto right = header.withSizeKeepingCentre (header.getWidth(), 30);
     zoomBox.setBounds (right.removeFromRight (74));
@@ -239,11 +294,20 @@ void NebulaContent::resized()
     right.removeFromRight (2);
     undoButton.setBounds (right.removeFromRight (28));
 
-    keyboard.setBounds (r.removeFromBottom (58).withTrimmedBottom (8));
+    keyboard.setBounds (r.removeFromBottom (50).withTrimmedBottom (6));
     keyboard.setKeyWidth ((float) keyboard.getWidth() / 36.0f);
+    r.removeFromBottom (4);
+    macros.setBounds (r.removeFromBottom (82));
     r.removeFromBottom (6);
-    macros.setBounds (r.removeFromBottom (86));
-    r.removeFromBottom (8);
+    const auto workArea = r;   // DESCUBRIR y TRANSFORMAR usan todo el alto
+    if (currentWorkspace == 1)
+    {
+        // CREAR: las cuatro pestañas de siempre bajo el encabezado
+        auto tabRow = r.removeFromTop (34).withTrimmedTop (2);
+        auto tabArea = tabRow.withSizeKeepingCentre (452, 30).withX (tabRow.getX());
+        for (auto& t : tabs) t->setBounds (tabArea.removeFromLeft (113).reduced (2, 0));
+        r.removeFromTop (4);
+    }
 
     garden.setBounds (r);
     edit.setBounds (r);
@@ -254,7 +318,8 @@ void NebulaContent::resized()
     recipePanel.setBounds (r.reduced (150, 0).withTrimmedBottom (-60));
     cleanerPanel.setBounds (r.reduced (24, 0).withTrimmedBottom (-40));
     dnaPanel.setBounds (r.reduced (16, 0).withTrimmedBottom (-60));
-    forgePanel.setBounds (r.reduced (16, 0).withTrimmedBottom (-60));
+    forgePanel.setBounds (workArea);
+    transformView.setBounds (workArea);
     browser.setBounds (r.reduced (200, 10));
 }
 

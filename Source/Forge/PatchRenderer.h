@@ -62,7 +62,7 @@ namespace Forge
             const int total = juce::jmax (1, (int) (totalS * sampleRate)), hold = (int) (holdS * sampleRate);
             juce::AudioBuffer<float> out (2, total);
             out.clear();
-            constexpr int block = 256;
+            static constexpr int block = 256;
             for (int pos = 0; pos < total; pos += block)
             {
                 const int n = juce::jmin (block, total - pos);

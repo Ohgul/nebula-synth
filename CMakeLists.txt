@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.22)
 set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "")
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "")
 
-project(NebulaSynth VERSION 3.1.0)
+project(NebulaSynth VERSION 0.4.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -46,11 +46,26 @@ juce_add_plugin(NebulaSynth
 target_sources(NebulaSynth PRIVATE ${NEBULA_SOURCES})
 
 target_compile_definitions(NebulaSynth PUBLIC
+    NEBULA_VERSION_STRING="${PROJECT_VERSION}"
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
     JUCE_DISPLAY_SPLASH_SCREEN=0
 )
+
+# MSVC: las fuentes están en UTF-8 (comentarios en español)
+if(MSVC)
+    target_compile_options(NebulaSynth PRIVATE /utf-8 /bigobj)
+endif()
+
+# FORGE: base de patches nativos con su huella sonora (generada con "NebulaTests ForgeDb generar")
+set(NEBULA_FORGE_DATA "${CMAKE_CURRENT_SOURCE_DIR}/Resources/forge/nebula_dna.ndb")
+if(EXISTS "${NEBULA_FORGE_DATA}")
+    juce_add_binary_data(NebulaForgeData SOURCES "${NEBULA_FORGE_DATA}")
+    set_target_properties(NebulaForgeData PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    target_link_libraries(NebulaSynth PRIVATE NebulaForgeData)
+    target_compile_definitions(NebulaSynth PRIVATE NEBULA_HAS_FORGE_DATA=1)
+endif()
 
 target_link_libraries(NebulaSynth
     PRIVATE
@@ -69,7 +84,7 @@ option(NEBULA_BUILD_TESTS "Compilar las pruebas sin DAW" OFF)
 if(NEBULA_BUILD_TESTS)
     set(NEBULA_TEST_NAMES "")
     set(NEBULA_TEST_FILES "")
-    foreach(t Render Imitate V2 V21 V3 Ui Bench Stereo Determinism Midi Dna Transform Forge)
+    foreach(t Render Imitate V2 V21 V3 Ui Bench Stereo Determinism Midi Dna Transform Forge ForgeDb Genome Realtime)
         if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/${t}Test.cpp")
             message(STATUS "Prueba no encontrada (se omite): ${t}Test.cpp")
             continue()
@@ -88,7 +103,15 @@ if(NEBULA_BUILD_TESTS)
     target_sources(NebulaTests PRIVATE ${NEBULA_SOURCES} ${NEBULA_TEST_FILES} tests/TestMain.cpp)
     target_include_directories(NebulaTests PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
     target_compile_definitions(NebulaTests PRIVATE
+        NEBULA_VERSION_STRING="${PROJECT_VERSION}"
         JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_DISPLAY_SPLASH_SCREEN=0 JUCE_MODAL_LOOPS_PERMITTED=1)
     target_link_libraries(NebulaTests PRIVATE
         juce::juce_audio_utils juce::juce_dsp juce::juce_recommended_config_flags)
+    if(MSVC)
+        target_compile_options(NebulaTests PRIVATE /utf-8 /bigobj)
+    endif()
+    if(TARGET NebulaForgeData)
+        target_link_libraries(NebulaTests PRIVATE NebulaForgeData)
+        target_compile_definitions(NebulaTests PRIVATE NEBULA_HAS_FORGE_DATA=1)
+    endif()
 endif()

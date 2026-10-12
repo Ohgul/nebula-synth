@@ -2,6 +2,9 @@
 #include "ReferenceFeatures.h"
 #include "PatchRenderer.h"
 #include "../Similarity.h"
+#include "FastPitch.h"
+#include "PatchDataset.h"
+#include "CmaEs.h"
 
 // ===========================================================================
 // FORGE · síntesis inversa (CandidateSearcher)
@@ -38,6 +41,10 @@ namespace Forge
         int generation = 0;
         juce::String parentId;
         juce::String structure;          // resumen legible de la receta
+        juce::String source;             // "estimacion", "indice" o "exploracion"
+        SynthPatch initialPatch;         // punto de partida antes de optimizar
+        double initialLoss = 0.0;
+        float initialFidelity = -1.0f;   // fidelidad medida del punto de partida (AT004)
     };
 
     // ---------- descripción y complejidad de una receta ----------
@@ -67,6 +74,27 @@ namespace Forge
         parts.add (juce::String::formatted ("Amp A %.0f ms D %.2f s S %.0f %%", p.get (ParamID::ampA) * 1000, p.get (ParamID::ampD), p.get (ParamID::ampS) * 100));
         if (complexityOut != nullptr) *complexityOut = cx;
         return parts.joinIntoString (" | ");
+    }
+
+    // ---------- estructura de una receta (qué módulos y rutas usa, sin valores finos) ----------
+    // Dos recetas con la misma clave sólo difieren en perillas; con clave distinta son otra forma de construir
+    // el sonido (otra onda, otro módulo, otra ruta de modulación). Se usa para la diversidad explícita.
+    inline juce::String structureKey (const SynthPatch& p)
+    {
+        juce::String k;
+        if (p.geti (ParamID::osc1On)) k << "o1w" << p.geti (ParamID::osc1Wave) << "o" << p.geti (ParamID::osc1Octave);
+        if (p.geti (ParamID::osc2On) && p.get (ParamID::oscMix) > 0.01f) k << "|o2w" << p.geti (ParamID::osc2Wave) << (p.geti (ParamID::osc2Semi) != 0 ? "s" : "");
+        if (p.get (ParamID::fmAmount) > 0.01f) k << "|fm";
+        if (p.geti (ParamID::subOn) && p.get (ParamID::subLevel) > 0.01f) k << "|sub";
+        if (p.geti (ParamID::noiseOn) && (p.get (ParamID::noise) > 0.01f || std::abs (p.getMod (ModSrc::Env2, ModDst::Noise)) > 0.01f)) k << "|nz";
+        if (p.geti (ParamID::f1On) && p.get (ParamID::cutoff) < 19000.0f) k << "|flt";
+        if (p.geti (ParamID::driveOn) && p.get (ParamID::drive) > 0.01f) k << "|drv";
+        if (std::abs (p.get (ParamID::filterEnv)) > 0.01f) k << "|fenv";
+        if (p.get (ParamID::lfoPitch) > 0.5f) k << "|vib";
+        for (int s = 0; s < 4; ++s)
+            for (int d = 0; d < ModDst::count; ++d)
+                if (std::abs (p.getMod (s, d)) > 0.01f) k << "|m" << s << "." << d;
+        return k;
     }
 
     // ---------- evaluación ----------
@@ -147,7 +175,27 @@ namespace Forge
                 pitchTerm = (nd > 0 ? d / nd : 0.0) + (ns > 0 ? depth / ns : 0.0);
             }
             const double atk = std::abs (c.early - refF.early);
-            return colorDb / 3.0 + envDb / 3.0 + pitchTerm / 30.0 + atk / 6.0;
+            // La envolvente general ignora la referencia por debajo de -40 dB.
+            // En pads eso deja sin castigo colas audibles que se cortan pronto.
+            // La cola se compara después del note-off, sólo donde la referencia
+            // está dentro de 55 dB de su máximo. El peso es deliberadamente
+            // moderado para no perjudicar ataques/bajos ya recuperados.
+            double tailError = 0.0;
+            double tailWeight = 0.0;
+            const size_t tailStart = (size_t) juce::jlimit (0, (int) refF.loud.size(),
+                (int) std::floor (holdS / 0.01)); // loudnessCurve usa pasos de 10 ms
+            for (size_t i = tailStart; i < refF.loud.size() && i < c.loud.size(); ++i)
+            {
+                const double r = refF.loud[i];
+                if (r <= refF.loudMax - 55.0) continue;
+                const double x = juce::jmax (c.loud[i], refF.loudMax - 75.0);
+                const double d = juce::jlimit (-35.0, 35.0, r - x);
+                const double weight = juce::jlimit (0.0, 1.0, (r - (refF.loudMax - 55.0)) / 15.0);
+                tailError += weight * d * d;
+                tailWeight += weight;
+            }
+            const double tailDb = tailWeight > 0.0 ? std::sqrt (tailError / tailWeight) : 0.0;
+            return colorDb / 3.0 + envDb / 3.0 + pitchTerm / 30.0 + atk / 6.0 + tailDb / 6.0;
         }
 
         // Fidelidad completa (la que se muestra): comparación del banco a la frecuencia original
@@ -204,52 +252,7 @@ namespace Forge
             return f;
         }
 
-        // Tono rápido para la búsqueda: YIN directo sobre la señal filtrada y diezmada a 32·f0 (sólo interesa
-        // la fundamental, entre una octava abajo y dos arriba de la del cuerpo), cada 25 ms
-        static std::vector<double> pitchTrack (const std::vector<double>& x, double sr, double f0)
-        {
-            std::vector<double> out;
-            if (f0 <= 0.0) return out;
-            const double srD = juce::jmin (sr, 32.0 * f0);
-            // filtro de 4 polos (dos biquads) a 12·f0 y remuestreo lineal
-            juce::IIRCoefficients c = juce::IIRCoefficients::makeLowPass (sr, juce::jmin (sr * 0.45, 12.0 * f0), 0.54);
-            juce::IIRCoefficients c2 = juce::IIRCoefficients::makeLowPass (sr, juce::jmin (sr * 0.45, 12.0 * f0), 1.31);
-            juce::IIRFilter a, b; a.setCoefficients (c); b.setCoefficients (c2);
-            std::vector<float> y (x.size());
-            for (size_t i = 0; i < x.size(); ++i) y[i] = b.processSingleSampleRaw (a.processSingleSampleRaw ((float) x[i]));
-            const double step = sr / srD;
-            std::vector<double> d ((size_t) (x.size() / step) + 1);
-            for (size_t i = 0; i < d.size(); ++i)
-            {
-                const double pos = i * step; const size_t i0 = (size_t) pos; const double fr = pos - (double) i0;
-                d[i] = i0 + 1 < y.size() ? y[i0] * (1.0 - fr) + y[i0 + 1] * fr : 0.0;
-            }
-            const int tmin = juce::jmax (2, (int) (srD / (4.0 * f0))), tmax = (int) (srD / (0.5 * f0)), W = 2 * tmax;
-            const int hop = juce::jmax (1, (int) (0.025 * srD));
-            std::vector<double> df ((size_t) tmax + 2);
-            for (int start = 0; start + W + tmax < (int) d.size(); start += hop)
-            {
-                double energy = 0; for (int j = 0; j < W; ++j) energy += d[(size_t) (start + j)] * d[(size_t) (start + j)];
-                if (energy < 1.0e-10) { out.push_back (0.0); continue; }
-                double run = 0; int found = -1;
-                df[0] = 1.0;
-                for (int t = 1; t <= tmax; ++t)
-                {
-                    double acc = 0;
-                    for (int j = 0; j < W; ++j) { const double e = d[(size_t) (start + j)] - d[(size_t) (start + j + t)]; acc += e * e; }
-                    run += acc;
-                    df[(size_t) t] = run > 0 ? acc * t / run : 1.0;
-                }
-                for (int t = tmin; t < tmax; ++t)
-                    if (df[(size_t) t] < 0.15) { while (t + 1 < tmax && df[(size_t) t + 1] < df[(size_t) t]) ++t; found = t; break; }
-                if (found < 0) { out.push_back (0.0); continue; }
-                const double l = df[(size_t) found - 1], m = df[(size_t) found], r = df[(size_t) found + 1];
-                const double den = l - 2 * m + r;
-                const double tau = found + (std::abs (den) > 1e-12 ? 0.5 * (l - r) / den : 0.0);
-                out.push_back (srD / tau);
-            }
-            return out;
-        }
+        static std::vector<double> pitchTrack (const std::vector<double>& x, double sr, double f0) { return fastPitchTrack (x, sr, f0, 0.025); }
 
         std::vector<double> centsCurve (const std::vector<double>& hz) const
         {
@@ -444,8 +447,31 @@ namespace Forge
     {
         juce::int64 seed = 1;
         int candidates = 8;                 // cuántos entregar (8-16)
-        int evaluationsPerArchitecture = 36;
+        int evaluationsPerArchitecture = 56;   // presupuesto por semilla de la búsqueda local (= cmaBudget + polishBudget)
+        int cmaBudget = 44;                 // evaluaciones de CMA-ES por semilla
+        int polishBudget = 12;              // pulido local después de CMA-ES
+        int retrieve = 24;                  // vecinos que se piden al índice (se evalúan todos)
+        int retrievedSeeds = 6;             // cuántos de ellos pasan a optimizarse
+        enum class Optimizer { CmaThenLocal, Local } optimizer = Optimizer::Local;   // elegido con "Forge optimizadores" (docs/0.4.0/P3-INVERSE-FORGE.md)
+        const Dataset* dataset = nullptr;   // base de patches (nullptr = sólo arquitecturas)
+        int datasetSplitMask = 0b110;       // particiones del índice que se usan (entrenamiento + validación)
+        double complexityPenalty = 0.01;    // REGULARIZACIÓN: pérdida extra por módulo activo
         double timeLimitS = 120.0;
+    };
+
+    // Diagnóstico de una búsqueda (SEARCH_DIAGNOSTICS)
+    struct SearchDiagnostics
+    {
+        struct SeedLog { juce::String label, source; double initialLoss = 0, finalLoss = 0; };
+        std::vector<SeedLog> seeds;
+        int evaluations = 0, retrieved = 0;
+        juce::String indexCategory;
+        double bestInitialLoss = 1.0e9, bestFinalLoss = 1.0e9, seconds = 0;
+        juce::String summary() const
+        {
+            return juce::String (evaluations) + " evaluaciones, " + juce::String (seconds, 1) + " s; indice: " + juce::String (retrieved) + " vecinos ("
+                 + indexCategory + "); perdida inicial " + juce::String (bestInitialLoss, 2) + " -> final " + juce::String (bestFinalLoss, 2);
+        }
     };
 
     class Searcher
@@ -457,49 +483,130 @@ namespace Forge
         std::atomic<float> progress { 0.0f };
         int evaluations = 0;
 
+        SearchDiagnostics diagnostics;
+
         std::vector<PatchCandidate> run (const SearchSettings& st)
         {
             const auto t0 = juce::Time::getMillisecondCounterHiRes();
+            diagnostics = {};
             const bool bass = ref.soundClass == SoundClass::Bass || (ref.pitched && ref.f0 < 110.0);
             auto archs = bass ? bassArchitectures() : leadArchitectures();
-            std::vector<PatchCandidate> pool;
-            const int total = (int) archs.size();
-            for (int ai = 0; ai < total && ! cancel.load(); ++ai)
+            settings = &st;
+
+            // ---- 1. Semillas: estimación por arquitectura + vecinos del índice ----
+            struct Seed { SynthPatch patch; std::vector<Gene> genes; juce::String id, source; double loss = 1.0e9; };
+            std::vector<Seed> seeds;
+            for (int ai = 0; ai < (int) archs.size() && ! cancel.load(); ++ai)
             {
-                const auto& arch = archs[(size_t) ai];
-                auto p = arch.estimate (ref);
-                p.origin = "forge"; p.reference = ref.name; p.architecture = arch.label; p.seed = st.seed;
-                auto genes = genesFor (arch, p, bass);
-                juce::Random rng (st.seed * 7919 + ai);
-                auto best = refine (p, genes, rng, st.evaluationsPerArchitecture, t0, st.timeLimitS);
-                pool.push_back (finish (best.first, best.second, arch.key + "-1", 0, {}));
-                progress = (float) (ai + 1) / (float) (total + 1);
+                auto p = archs[(size_t) ai].estimate (ref);
+                p.origin = "forge"; p.reference = ref.name; p.architecture = archs[(size_t) ai].label; p.seed = st.seed;
+                seeds.push_back ({ p, genesFor (archs[(size_t) ai], p, bass), archs[(size_t) ai].key, "estimacion" });
+            }
+            if (st.dataset != nullptr && ! st.dataset->entries.empty())
+            {
+                const double f0 = ref.pitched ? 440.0 * std::exp2 ((ref.note - 69) / 12.0) : 0.0;
+                const auto fp = fingerprint (ref.tuned, ref.sampleRate, f0, ref.releaseStartS);
+                int cat = -1;
+                const auto hits = st.dataset->query (fp, st.retrieve, st.datasetSplitMask, 0.04f, &cat);
+                diagnostics.retrieved = (int) hits.size();
+                diagnostics.indexCategory = cat >= 0 ? categoryName ((Category) cat) : "-";
+                std::vector<Seed> fromIndex;
+                for (auto& h : hits)
+                {
+                    if (cancel.load()) break;
+                    const auto& e = st.dataset->entries[(size_t) h.index];
+                    auto p = e.patch();
+                    p.origin = "forge"; p.reference = ref.name; p.seed = st.seed;
+                    p.architecture = juce::String ("Indice ") + categoryName (e.category);
+                    Seed sd { p, datasetGenes (*st.dataset, e.category, p), juce::String ("D") + juce::String ((int) e.category), "indice" };
+                    sd.loss = loss (p);
+                    fromIndex.push_back (std::move (sd));
+                }
+                std::sort (fromIndex.begin(), fromIndex.end(), [] (auto& a, auto& b) { return a.loss < b.loss; });
+                for (int i = 0; i < (int) fromIndex.size() && i < st.retrievedSeeds; ++i) seeds.push_back (fromIndex[(size_t) i]);
+            }
+            for (auto& sd : seeds) if (sd.loss >= 1.0e8 && ! cancel.load()) sd.loss = loss (sd.patch);
+            std::stable_sort (seeds.begin(), seeds.end(), [] (auto& a, auto& b) { return a.loss < b.loss; });
+            for (auto& sd : seeds) diagnostics.bestInitialLoss = juce::jmin (diagnostics.bestInitialLoss, sd.loss);
+            {
+                // Diversidad desde el principio: primero la mejor semilla de cada estructura, después el resto
+                std::vector<Seed> first, rest;
+                juce::StringArray keys;
+                for (auto& sd : seeds)
+                {
+                    const auto k = structureKey (sd.patch);
+                    if (keys.contains (k)) rest.push_back (sd); else { keys.add (k); first.push_back (sd); }
+                }
+                seeds = first;
+                seeds.insert (seeds.end(), rest.begin(), rest.end());
+            }
+
+            // ---- 2. Optimización: CMA-ES y pulido local (las mejores semillas, hasta llenar el pedido + 2) ----
+            std::vector<PatchCandidate> pool;
+            const int toOptimize = juce::jmin ((int) seeds.size(), st.candidates + 2);
+            int dCount = 0;
+            for (int i = 0; i < toOptimize && ! cancel.load(); ++i)
+            {
+                auto& sd = seeds[(size_t) i];
+                juce::Random rng (st.seed * 7919 + i);
+                std::pair<SynthPatch, double> best { sd.patch, sd.loss };
+                if (st.optimizer == SearchSettings::Optimizer::CmaThenLocal)
+                {
+                    best = cma (sd.patch, sd.genes, st.seed * 104729 + i, st.cmaBudget);
+                    if (sd.loss < best.second) best = { sd.patch, sd.loss };
+                    auto polished = refine (best.first, sd.genes, rng, st.polishBudget, t0, st.timeLimitS);
+                    if (polished.second < best.second) best = polished;
+                }
+                else
+                    best = refine (sd.patch, sd.genes, rng, st.evaluationsPerArchitecture, t0, st.timeLimitS);
+                const auto id = sd.source == "indice" ? sd.id + "." + juce::String (++dCount) : sd.id + "-1";
+                auto c = finish (best.first, best.second, id, 0, {});
+                c.initialPatch = sd.patch; c.initialLoss = sd.loss; c.source = sd.source;
+                pool.push_back (c);
+                diagnostics.seeds.push_back ({ id, sd.source, sd.loss, best.second });
+                diagnostics.bestFinalLoss = juce::jmin (diagnostics.bestFinalLoss, best.second);
+                progress = 0.9f * (float) (i + 1) / (float) toOptimize;
                 if ((juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0 > st.timeLimitS) break;
             }
-            // Exploración: variaciones de los mejores hasta llenar el pedido (con otra semilla cada una)
+
+            // ---- 3. Exploración si faltan candidatos ----
             std::sort (pool.begin(), pool.end(), [] (auto& a, auto& b) { return a.fidelity.loss < b.fidelity.loss; });
             juce::Random rng (st.seed * 104729 + 17);
             int variant = 2;
             const size_t bases = pool.size();
-            while ((int) pool.size() < st.candidates + 2 && bases > 0 && ! cancel.load()
+            int explored = 0;
+            while (bases > 0 && explored < 3 * st.candidates && ! cancel.load()
+                   && (int) select (pool, st.candidates).size() < st.candidates
                    && (juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0 < st.timeLimitS)
             {
-                const auto& parent = pool[(size_t) (variant - 2) % std::min<size_t> (bases, 3)];
-                auto child = mutate (parent.patch, rng, 0.25f);
+                ++explored;
+                const auto parent = pool[(size_t) (variant - 2) % std::min<size_t> (bases, 3)];
+                auto child = mutate (parent.patch, rng, 0.35f);
                 auto archIt = std::find_if (archs.begin(), archs.end(), [&] (auto& a) { return a.label == parent.patch.architecture; });
                 auto genes = genesFor (archIt != archs.end() ? *archIt : archs.front(), child, bass);
-                auto best = refine (child, genes, rng, st.evaluationsPerArchitecture / 2, t0, st.timeLimitS);
-                pool.push_back (finish (best.first, best.second, parent.id.upToFirstOccurrenceOf ("-", false, false) + "-" + juce::String (variant), 1, parent.id));
+                auto best = refine (child, genes, rng, st.polishBudget * 2, t0, st.timeLimitS);
+                auto c = finish (best.first, best.second, parent.id.upToFirstOccurrenceOf ("-", false, false) + "-" + juce::String (variant), 1, parent.id);
+                c.initialPatch = child; c.initialLoss = best.second; c.source = "exploracion";
+                pool.push_back (c);
                 ++variant;
             }
+
+            // ---- 4. Selección y medición completa ----
             auto chosen = select (pool, st.candidates);
-            for (auto& c : chosen) { if (cancel.load()) break; measureFully (c); }
-            // orden final por la fidelidad medida (a parecida, el más simple primero)
+            for (auto& c : chosen)
+            {
+                if (cancel.load()) break;
+                measureFully (c);
+                // fidelidad del punto de partida (para verificar que optimizar mejora: AT004)
+                c.initialFidelity = eval.score (eval.render (renderer, c.initialPatch)).overall;
+            }
             std::stable_sort (chosen.begin(), chosen.end(), [] (const PatchCandidate& a, const PatchCandidate& b)
             {
                 if (std::abs (a.fidelity.overall - b.fidelity.overall) < 0.02f) return a.complexity < b.complexity;
                 return a.fidelity.overall > b.fidelity.overall;
             });
+            diagnostics.evaluations = evaluations;
+            diagnostics.seconds = (juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0;
             progress = 1.0f;
             return chosen;
         }
@@ -530,11 +637,45 @@ namespace Forge
         const ReferenceFeatures& ref;
         Evaluator eval;
         PatchRenderer renderer;
+        const SearchSettings* settings = nullptr;
 
     private:
+        // Pérdida rápida + regularización por complejidad
+        double loss (const SynthPatch& q)
+        {
+            ++evaluations;
+            int cx = 0; describe (q, &cx);
+            return eval.fastLoss (eval.render (renderer, q, nullptr, true)) + (settings != nullptr ? settings->complexityPenalty : 0.01) * cx;
+        }
+
+        // CMA-ES separable sobre los genes (espacio normalizado, caja = rango de cada gen)
+        std::pair<SynthPatch, double> cma (const SynthPatch& start, const std::vector<Gene>& genes, juce::int64 seed, int budget)
+        {
+            std::vector<double> x0, lo, hi;
+            for (auto& g : genes) { x0.push_back (start.getNorm (g.id)); lo.push_back (g.lo); hi.push_back (g.hi); }
+            auto apply = [&] (const std::vector<double>& x) { auto q = start; for (size_t i = 0; i < genes.size(); ++i) q.setNorm (genes[i].id, (float) x[i]); return q; };
+            const auto r = cmaesMinimize ([&] (const std::vector<double>& x) { return loss (apply (x)); }, x0, lo, hi, 0.08, budget, seed, &cancel);
+            if (r.best.empty()) return { start, 1.0e9 };
+            return { apply (r.best), r.bestValue };
+        }
+
+        // Genes de un patch del índice: los parámetros que varían en su categoría (máximo 16, los de más rango)
+        static std::vector<Gene> datasetGenes (const Dataset& d, Category c, const SynthPatch& p)
+        {
+            std::vector<Gene> g;
+            for (int idx : d.variedParams (c))
+            {
+                const auto& info = synthParams()[(size_t) idx];
+                if (info.discrete) continue;   // ondas, octavas y encendidos quedan como los trae el vecino
+                g.push_back (geneAround (p, info.id, 0.2f));
+                if (g.size() >= 16) break;
+            }
+            return g;
+        }
+
         std::pair<SynthPatch, double> refine (SynthPatch p, const std::vector<Gene>& genes, juce::Random& rng, int budget, double t0, double limitS)
         {
-            auto evalP = [&] (const SynthPatch& q) { ++evaluations; return eval.fastLoss (eval.render (renderer, q, nullptr, true)); };
+            auto evalP = [&] (const SynthPatch& q) { return loss (q); };
             double best = evalP (p);
             float step = 0.12f;
             int used = 1;
@@ -586,29 +727,45 @@ namespace Forge
         }
 
     private:
-        // Los mejores, sin casi-duplicados; a fidelidad parecida (5 %) primero el más simple
+        // Diversidad explícita: primero la mejor receta de cada estructura distinta (dentro de un margen de
+        // pérdida respecto de la mejor), luego se completa con las mejores restantes que no sean casi-duplicados.
+        // Orden: pérdida con un pequeño recargo por complejidad (orden estricto, apto para std::sort).
         static std::vector<PatchCandidate> select (std::vector<PatchCandidate> pool, int count)
         {
-            std::sort (pool.begin(), pool.end(), [] (const PatchCandidate& a, const PatchCandidate& b)
-            {
-                const double la = a.fidelity.loss, lb = b.fidelity.loss;
-                if (std::abs (la - lb) < 0.05 * juce::jmin (la, lb)) return a.complexity < b.complexity;
-                return la < lb;
-            });
+            auto rank = [] (const PatchCandidate& c) { return c.fidelity.loss * (1.0 + 0.01 * c.complexity); };
+            pool.erase (std::remove_if (pool.begin(), pool.end(), [] (const PatchCandidate& c)
+                        { return c.fidelity.silent || c.fidelity.loss >= 1.0e5 || ! std::isfinite (c.fidelity.loss); }), pool.end());
+            std::stable_sort (pool.begin(), pool.end(), [&] (const PatchCandidate& a, const PatchCandidate& b) { return rank (a) < rank (b); });
             std::vector<PatchCandidate> out;
-            for (auto& c : pool)
+            if (pool.empty()) return out;
+            auto paramDistance = [] (const SynthPatch& a, const SynthPatch& b)
             {
-                if (c.fidelity.silent || c.fidelity.loss >= 1.0e5) continue;
-                bool dup = false;
-                for (auto& o : out)
-                {
-                    double d = 0; int n = 0;
-                    for (auto& info : synthParams()) { d += std::abs (c.patch.getNorm (info.id) - o.patch.getNorm (info.id)); ++n; }
-                    if (d / n < 0.004 && c.patch.architecture == o.patch.architecture) { dup = true; break; }
-                }
-                if (! dup) out.push_back (c);
-                if ((int) out.size() >= count) break;
+                double d = 0; int n = 0;
+                for (auto& info : synthParams()) { d += std::abs (a.getNorm (info.id) - b.getNorm (info.id)); ++n; }
+                return d / juce::jmax (1, n);
+            };
+            const double margin = pool.front().fidelity.loss * 2.0 + 0.1;
+            std::vector<bool> taken (pool.size(), false);
+            juce::StringArray keys;
+            // 1) una por estructura
+            for (size_t i = 0; i < pool.size() && (int) out.size() < count; ++i)
+            {
+                if (pool[i].fidelity.loss > margin) break;
+                const auto key = structureKey (pool[i].patch);
+                if (keys.contains (key)) continue;
+                keys.add (key);
+                out.push_back (pool[i]); taken[i] = true;
             }
+            // 2) completar con las mejores que no sean casi-duplicados
+            for (size_t i = 0; i < pool.size() && (int) out.size() < count; ++i)
+            {
+                if (taken[i]) continue;
+                bool dup = false;
+                // media sobre todos los parámetros de síntesis (la mayoría iguales): 0.004 ~ un par de perillas casi iguales
+                for (auto& o : out) if (paramDistance (pool[i].patch, o.patch) < 0.004) { dup = true; break; }
+                if (! dup) { out.push_back (pool[i]); taken[i] = true; }
+            }
+            std::stable_sort (out.begin(), out.end(), [&] (const PatchCandidate& a, const PatchCandidate& b) { return rank (a) < rank (b); });
             return out;
         }
     };

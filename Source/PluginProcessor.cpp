@@ -527,7 +527,10 @@ void NebulaAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
     synth.setCurrentPlaybackSampleRate (sampleRate);
     for (int i = 0; i < synth.getNumVoices(); ++i)
         if (auto* v = dynamic_cast<SynthVoice*> (synth.getVoice (i)))
+        {
+            v->reserveFor (sampleRate * 4.0);
             v->prepare (sampleRate);
+        }
 
     maxBlock = juce::jmax (16, samplesPerBlockExpected);
     os2 = std::make_unique<juce::dsp::Oversampling<float>> (2, 1, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, false);
@@ -562,7 +565,7 @@ void NebulaAudioProcessor::restartRandomSequence()
     currentFactor = 1;
     synth.setCurrentPlaybackSampleRate (currentSampleRate);
     for (int i = 0; i < synth.getNumVoices(); ++i)
-        if (auto* v = dynamic_cast<SynthVoice*> (synth.getVoice (i))) v->prepare (currentSampleRate);
+        if (auto* v = dynamic_cast<SynthVoice*> (synth.getVoice (i))) { v->reserveFor (currentSampleRate * 4.0); v->prepare (currentSampleRate); }
     dcX[0] = dcX[1] = dcY[0] = dcY[1] = 0.0f;
     masterGain.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (state.getRawParameterValue (ParamID::master)->load(), -60.0f));
 }
@@ -1018,6 +1021,7 @@ bool NebulaAudioProcessor::startForge (juce::int64 seed, int count)
     if (! ok) return false;
     Forge::SearchSettings st;
     st.seed = seed; st.candidates = juce::jlimit (8, 16, count);
+    st.dataset = Forge::builtInDataset();   // vecinos de la base de patches nativos como puntos de partida
     forgeJob.start (section, sampleSource.get()->sampleRate, sampleSource.get()->name, st);
     return true;
 }
@@ -1030,8 +1034,67 @@ bool NebulaAudioProcessor::forgeMutate (int index, juce::int64 seed)
     if (! ok || index < 0 || index >= (int) list.size()) return false;
     Forge::SearchSettings st;
     st.seed = seed; st.candidates = 8;
-    forgeJob.start (section, sampleSource.get()->sampleRate, sampleSource.get()->name, st, list[(size_t) index]);
+    forgeJob.start (section, sampleSource.get()->sampleRate, sampleSource.get()->name, st, list[(size_t) index], std::nullopt, forgeLocks());
     return true;
+}
+
+bool NebulaAudioProcessor::forgeCrossover (int a, int b, juce::int64 seed)
+{
+    bool ok = false;
+    auto section = forgeSection (ok);
+    const auto list = forgeCandidates();
+    if (! ok || a == b || a < 0 || b < 0 || a >= (int) list.size() || b >= (int) list.size()) return false;
+    Forge::SearchSettings st;
+    st.seed = seed; st.candidates = 8;
+    forgeJob.start (section, sampleSource.get()->sampleRate, sampleSource.get()->name, st, list[(size_t) a], list[(size_t) b], forgeLocks());
+    return true;
+}
+
+Forge::ModuleLocks NebulaAudioProcessor::forgeLocks() const
+{
+    return Forge::ModuleLocks::fromString (state.state["forgeLocks"].toString());
+}
+
+void NebulaAudioProcessor::setForgeLock (Forge::Module m, bool locked)
+{
+    auto l = forgeLocks();
+    l.set (m, locked);
+    state.state.setProperty ("forgeLocks", l.toString(), nullptr);
+}
+
+static Forge::PolarityEdit readPolarity (const juce::ValueTree& st)
+{
+    const auto xml = st["forgePolarity"].toString();
+    if (xml.isEmpty()) return {};
+    if (auto x = juce::parseXML (xml)) return Forge::PolarityEdit::fromValueTree (juce::ValueTree::fromXml (*x));
+    return {};
+}
+
+void NebulaAudioProcessor::setRecipePolarity (float amount)
+{
+    auto e = readPolarity (state.state);
+    const auto now = currentSynthPatch();
+    // la receta que suena ahora pasa a ser la base (también si se tocaron perillas después del último movimiento)
+    if (! e.active || ! now.sameSound (e.result(), 1.0e-4f)) e.begin (now);
+    e.locks = forgeLocks();
+    e.amount = juce::jlimit (-1.0f, 1.0f, amount);
+    const auto edit = e.toValueTree().toXmlString();
+    auto patch = e.result();
+    patch.name = e.base.name;
+    applySynthPatch (patch);                          // (applySynthPatch no toca la base guardada)
+    state.state.setProperty ("forgePolarity", edit, nullptr);
+}
+
+float NebulaAudioProcessor::recipePolarity() const { return readPolarity (state.state).amount; }
+bool NebulaAudioProcessor::recipePolarityActive() const { return readPolarity (state.state).active; }
+
+void NebulaAudioProcessor::revertRecipePolarity()
+{
+    auto e = readPolarity (state.state);
+    if (! e.active) return;
+    const auto base = e.revert();
+    applySynthPatch (base);
+    state.state.removeProperty ("forgePolarity", nullptr);
 }
 
 void NebulaAudioProcessor::collectForgeResult()
@@ -1043,7 +1106,23 @@ void NebulaAudioProcessor::collectForgeResult()
     if (! forgeList.empty()) forgeHistory.push_back (forgeList);   // se conserva la generación anterior
     forgeList = std::move (r.candidates);
     forgeFeatures = std::move (r.features);
+    forgeDiagnostics = r.generation > 0
+        ? "generacion " + juce::String (r.generation) + ": " + juce::String ((int) forgeList.size()) + " hijos ("
+            + (forgeList.empty() ? juce::String() : forgeList.front().source) + ") medidos contra la referencia en " + juce::String (r.seconds, 1) + " s"
+        : r.diagnostics.summary();
     ++forgeRuns;
+}
+
+bool NebulaAudioProcessor::restoreForgeGeneration (int historyIndex)
+{
+    {
+        const juce::ScopedLock sl (forgeLock);
+        if (historyIndex < 0 || historyIndex >= (int) forgeHistory.size() || forgeJob.isRunning()) return false;
+        std::swap (forgeList, forgeHistory[(size_t) historyIndex]);   // nada se pierde: se intercambian
+        forgeDiagnostics = "generacion " + juce::String (forgeList.empty() ? 0 : forgeList.front().generation) + " restaurada";
+    }
+    ++forgeRuns;
+    return true;
 }
 
 void NebulaAudioProcessor::auditionForgeCandidate (int index)
@@ -1080,6 +1159,7 @@ void NebulaAudioProcessor::applySynthPatch (const Forge::SynthPatch& p)
     set (ParamID::fxWidth, 1.0f);
     for (auto* id : { ParamID::macroBright, ParamID::macroBody, ParamID::macroMove, ParamID::macroSpace, ParamID::macroChaos }) set (id, 0.0f);
     state.state.setProperty ("forgePatch", p.toXmlString(), nullptr);
+    state.state.removeProperty ("forgePolarity", nullptr);   // otra receta: Cosmos/Abismo empieza desde ella
     state.state.setProperty ("preset", -1, nullptr);
     markReference();
 }

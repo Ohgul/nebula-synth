@@ -8,12 +8,18 @@
 // ===========================================================================
 namespace NebulaColours
 {
+    // Tokens de diseño 0.4.0 (NEBULA-CORE-040): fondo, superficie, Cosmos y Abismo
+    inline const juce::Colour tokenBackground { 0xff090a0d };
+    inline const juce::Colour tokenSurface    { 0xff15171d };
+    inline const juce::Colour cosmos          { 0xff789dd8 };
+    inline const juce::Colour abyss           { 0xffa84742 };
+
     // Grafito: fondo casi negro, paneles apenas más claros, un solo acento frío y uno cálido
-    inline const juce::Colour background { 0xff0c0d0f };
-    inline const juce::Colour panel      { 0xff15171a };
-    inline const juce::Colour panelEdge  { 0xff26292e };
-    inline const juce::Colour track      { 0xff1d2024 };
-    inline const juce::Colour accent     { 0xff9fb3e6 }; // azul hielo (acción principal, Cosmos)
+    inline const juce::Colour background = tokenBackground;
+    inline const juce::Colour panel      = tokenSurface;
+    inline const juce::Colour panelEdge  { 0xff262a32 };
+    inline const juce::Colour track      { 0xff1d2027 };
+    inline const juce::Colour accent     = cosmos;       // acción principal, Cosmos
     inline const juce::Colour accent2    { 0xff8cc4bb }; // verde agua apagado (estado, señal)
     inline const juce::Colour warm       { 0xffd98a6a }; // brasa (filtro 2, avisos, Abismo)
     inline const juce::Colour text       { 0xffe4e6ea };

@@ -15,6 +15,7 @@
 #include "Dna.h"
 #include "Similarity.h"
 #include "Forge/ForgeJob.h"
+#include "Forge/Polarity.h"
 
 class NebulaAudioProcessor : public juce::AudioProcessor,
                              private juce::AsyncUpdater,
@@ -172,11 +173,24 @@ public:
     std::vector<Forge::PatchCandidate> forgeCandidates() const  { const juce::ScopedLock sl (forgeLock); return forgeList; }
     Forge::ReferenceFeatures forgeReference() const             { const juce::ScopedLock sl (forgeLock); return forgeFeatures; }
     std::vector<std::vector<Forge::PatchCandidate>> forgeGenerations() const { const juce::ScopedLock sl (forgeLock); return forgeHistory; }
+    bool restoreForgeGeneration (int historyIndex);             // la generación guardada pasa a la lista; la actual queda guardada en su lugar
     void auditionForgeCandidate (int index);                    // escuchar sin cambiar el sonido
     void auditionForgeReference();                              // la referencia, afinada a su tecla
     void applySynthPatch (const Forge::SynthPatch&);            // el patch pasa a ser el sonido (motor Synth)
     Forge::SynthPatch currentSynthPatch() const;                // la receta que suena ahora
     std::atomic<int> forgeRuns { 0 };
+    juce::String forgeDiagnosticsText() const { const juce::ScopedLock sl (forgeLock); return forgeDiagnostics; }
+
+    // ---- ADN estructural (P4): candados por módulo, cruce de dos candidatos ----
+    Forge::ModuleLocks forgeLocks() const;                       // se guardan con el proyecto
+    void setForgeLock (Forge::Module m, bool locked);
+    bool forgeCrossover (int indexA, int indexB, juce::int64 seed);   // 8 hijos por módulos, medidos contra la referencia
+
+    // ---- Cosmos / Abismo sobre la receta (P6): reversible, el resultado es un patch nativo ----
+    void setRecipePolarity (float amount);                       // -1 Abismo .. 0 base .. +1 Cosmos
+    float recipePolarity() const;
+    void revertRecipePolarity();                                 // vuelve exactamente a la receta base
+    bool recipePolarityActive() const;
 
     void applyImitationResult();         // se llama solo al terminar (también usable en pruebas)
     std::atomic<float> lastSimilarity { -1.0f };
@@ -219,6 +233,7 @@ private:
     std::vector<Forge::PatchCandidate> forgeList;
     std::vector<std::vector<Forge::PatchCandidate>> forgeHistory;   // generaciones anteriores
     Forge::ReferenceFeatures forgeFeatures;
+    juce::String forgeDiagnostics;
     juce::AudioBuffer<float> forgeSection (bool& ok) const;
     std::atomic<bool> forgePending { false };
 public:

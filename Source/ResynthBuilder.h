@@ -113,7 +113,7 @@ namespace ResynthBuilder
         }
 
         // ---- STFT por cuadro (2048) para el ruido y los parciales ----
-        constexpr int order = 11, N = 1 << order;
+        static constexpr int order = 11, N = 1 << order;
         juce::dsp::FFT fft (order);
         std::vector<float> win ((size_t) N), buf ((size_t) N * 2);
         double sumW = 0.0, sumW2 = 0.0;

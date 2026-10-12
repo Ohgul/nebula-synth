@@ -101,7 +101,7 @@ std::vector<double> segment (const juce::AudioBuffer<float>& b, double t0, doubl
 // Centroide espectral medio (Hz) de un tramo
 double centroid (const std::vector<double>& x)
 {
-    constexpr int order = 12, N = 1 << order;
+    static constexpr int order = 12, N = 1 << order;
     juce::dsp::FFT fft (order);
     std::vector<float> buf (2 * N);
     double num = 0, den = 0;

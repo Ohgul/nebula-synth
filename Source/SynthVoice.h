@@ -77,6 +77,9 @@ public:
         tf.prepare (sampleRate);
     }
 
+    // Memoria para la Calidad más alta (4x): cambiar la Calidad mientras suena no reasigna en el hilo de audio
+    void reserveFor (double maxSampleRate) { rsPlayer.reserve (maxSampleRate); tf.reserve (maxSampleRate); }
+
     // Deja la voz como recién creada (lo usa reset() en modo de azar reproducible)
     void resetState()
     {
