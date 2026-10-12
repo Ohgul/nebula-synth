@@ -1,4 +1,5 @@
 #pragma once
+#include "TransformUI.h"
 #include "Widgets.h"
 #include "SampleEditor.h"
 
@@ -70,7 +71,7 @@ public:
     void loadFile (const juce::File&);
     void chooseFile();
     void setDragHover (bool h)          { dragHover = h; repaint(); }
-    std::function<void()> onSoundChanged, onOpenEditor, onOpenCleaner, onOpenRecipe;
+    std::function<void()> onSoundChanged, onOpenEditor, onOpenCleaner, onOpenRecipe, onOpenDna;
     std::function<int()> framesForWave;
 
 private:
@@ -82,8 +83,11 @@ private:
                recreateButton { "RECREAR", Icons::wand(), "Nebula analiza la seccion y la reconstruye con su sinte: nota exacta, timbre, ruido y envolvente" },
                editButton    { "Seccion", Icons::scissors(), "Elige que parte del audio se usa" },
                cleanButton   { "Limpiar", Icons::broom(), "Rescata solo la parte que quieres (nota, golpes, sin ruido...)" },
-               recipeButton  { "Como se hizo?", Icons::recipe(), "La receta: que es el sonido y como lo reconstruyo Nebula" },
-               cancelButton  { "Cancelar", Icons::stop(), "Detener" };
+               recipeButton  { "Receta", Icons::recipe(), "La receta: que es el sonido y como lo reconstruyo Nebula" },
+               cancelButton  { "Cancelar", Icons::stop(), "Detener" },
+               dnaButton     { "ADN", Icons::dna(), "Editor de ADN: genes del sonido recreado, mutaciones con semilla y A/B" };
+    TransformStrip transformStrip;
+    juce::Rectangle<int> transformArea;
     std::unique_ptr<juce::FileChooser> chooser;
     std::shared_ptr<const SampleData> shown;
     juce::String message;
@@ -108,7 +112,7 @@ public:
     void filesDropped (const juce::StringArray& files, int, int) override;
     void paintOverChildren (juce::Graphics&) override;
 
-    std::function<void()> onOpenSampleEditor, onOpenCleaner, onOpenRecipe;
+    std::function<void()> onOpenSampleEditor, onOpenCleaner, onOpenRecipe, onOpenDna;
     std::function<int()> framesForWave;
 
 private:

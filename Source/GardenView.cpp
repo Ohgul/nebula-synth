@@ -435,8 +435,13 @@ void GardenCanvas::paint (juce::Graphics& g)
 }
 
 //==============================================================================
-SamplePanel::SamplePanel (NebulaAudioProcessor& p) : processor (p), region (p, false)
+SamplePanel::SamplePanel (NebulaAudioProcessor& p) : processor (p), region (p, false), transformStrip (p, true)
 {
+    addAndMakeVisible (transformStrip);
+    dnaButton.horizontal = true;
+    dnaButton.colour = accent2;
+    dnaButton.onClick = [this] { if (onOpenDna) onOpenDna(); };
+    addAndMakeVisible (dnaButton);
     addAndMakeVisible (region);
     region.onClick = [this] { if (processor.sampleSource.get() == nullptr) chooseFile(); else if (onOpenEditor) onOpenEditor(); };
     region.setInterceptsMouseClicks (true, false);
@@ -492,6 +497,7 @@ void SamplePanel::update()
     const bool has = shown != nullptr;
     for (auto* b : { &recreateButton, &editButton, &cleanButton }) b->setEnabled (has && ! imitating);
     recipeButton.setVisible (recreated || processor.recipeOrigin != NebulaAudioProcessor::RecipeOrigin::None);
+    dnaButton.setEnabled (processor.resynthModel() != nullptr);
     cancelButton.setVisible (imitating);
     loadButton.setVisible (has);
 
@@ -551,17 +557,47 @@ void SamplePanel::paint (juce::Graphics& g)
     // Parecido (grande) después de recrear
     if (recreated && processor.lastSimilarity.load() >= 0.0f && ! processor.isImitating())
     {
-        const auto r = juce::Rectangle<int> (0, recreateButton.getBottom() + 10, getWidth(), 40);
-        g.setColour (Neural::hot (accent2));
-        g.setFont (juce::FontOptions (28.0f, juce::Font::bold));
-        g.drawText (juce::String (juce::roundToInt (processor.lastSimilarity.load() * 100.0f)) + " %", r.withWidth (96), juce::Justification::centredLeft);
+        const auto r = juce::Rectangle<int> (0, recreateButton.getBottom() + 8, getWidth(), 34);
+        g.setColour (text);
+        g.setFont (juce::FontOptions (26.0f));
+        g.drawText (juce::String (juce::roundToInt (processor.lastSimilarity.load() * 100.0f)) + " %", r.withWidth (86), juce::Justification::centredLeft);
         g.setColour (textDim);
-        g.setFont (juce::FontOptions (11.5f));
-        g.drawFittedText ("de parecido con\nel original", r.withTrimmedLeft (96), juce::Justification::centredLeft, 2);
+        g.setFont (juce::FontOptions (11.0f));
+        g.drawFittedText ("de parecido medido\n(color, envolvente, tono)", r.withTrimmedLeft (86), juce::Justification::centredLeft, 2);
+        // detalle por aspecto: barras finas
+        const auto& rep = processor.lastReport;
+        if (rep.valid())
+        {
+            const std::pair<const char*, float> items[] { { "color", rep.color }, { "envolvente", rep.envelope }, { "tono", rep.pitch } };
+            int x = 0;
+            const int w = (getWidth() - 12) / 3;
+            for (auto& [name, v] : items)
+            {
+                if (v < 0.0f) continue;
+                auto cell = juce::Rectangle<int> (x, r.getBottom() + 2, w, 18);
+                g.setColour (textDim);
+                g.setFont (juce::FontOptions (9.5f));
+                g.drawText (juce::String (name) + " " + juce::String (juce::roundToInt (v * 100.0f)), cell.removeFromTop (11), juce::Justification::centredLeft);
+                g.setColour (track);
+                g.fillRect (cell.withHeight (2));
+                g.setColour (accent2);
+                g.fillRect (cell.withHeight (2).withWidth ((int) (cell.getWidth() * v)));
+                x += w + 6;
+            }
+        }
+    }
+
+    // Transformar
+    {
+        g.setColour (textDim);
+        juce::Font f (juce::FontOptions (10.0f, juce::Font::bold));
+        f.setExtraKerningFactor (0.08f);
+        g.setFont (f);
+        g.drawText ("TRANSFORMAR", transformArea.withHeight (14), juce::Justification::centredLeft);
     }
 
     // Estado
-    auto status = juce::Rectangle<int> (0, recipeButton.getBottom() + 10, getWidth(), 60);
+    auto status = juce::Rectangle<int> (0, recipeButton.getBottom() + 10, getWidth(), juce::jmax (20, transformArea.getY() - recipeButton.getBottom() - 14));
     if (processor.isImitating())
     {
         const float prog = processor.imitationProgress();
@@ -584,10 +620,13 @@ void SamplePanel::resized()
     region.setBounds (dropArea());
     loadButton.setBounds (getWidth() - 26, 110, 26, 22);
     recreateButton.setBounds (0, 154, getWidth(), 48);
-    recipeButton.setBounds (0, 262, getWidth(), 28);
+    recipeButton.setBounds (0, 268, getWidth() / 2 - 3, 28);
+    dnaButton.setBounds (getWidth() / 2 + 3, 268, getWidth() - getWidth() / 2 - 3, 28);
     cancelButton.setBounds (0, 212, 110, 26);
     // Lo secundario, chiquito y abajo
     const int y = getHeight() - 30;
+    transformArea = { 0, y - 122, getWidth(), 114 };
+    transformStrip.setBounds (transformArea.withTrimmedTop (16));
     editButton.setBounds (0, y, getWidth() / 2 - 3, 28);
     cleanButton.setBounds (getWidth() / 2 + 3, y, getWidth() - getWidth() / 2 - 3, 28);
 }
@@ -603,6 +642,7 @@ GardenView::GardenView (NebulaAudioProcessor& p) : processor (p), garden (p.gard
     samplePanel.framesForWave = [this] { return framesForWave ? framesForWave() : 32; };
     samplePanel.onOpenCleaner = [this] { if (onOpenCleaner) onOpenCleaner(); };
     samplePanel.onOpenRecipe = [this] { if (onOpenRecipe) onOpenRecipe(); };
+    samplePanel.onOpenDna = [this] { if (onOpenDna) onOpenDna(); };
 
     mutationSlider.setSliderStyle (juce::Slider::LinearHorizontal);
     mutationSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 44, 20);

@@ -134,7 +134,12 @@ int NEBULA_TEST_ENTRY (int argc, char** argv)
         click ("RECREAR");
         pump (1300);
         save (shot (1.0f), "ui_recreado.png");
-        click ("Como se hizo?");
+        { auto* p = proc->state.getParameter (ParamID::transform); p->setValueNotifyingHost (p->convertTo0to1 (-0.6f)); }
+        pump (400);
+        save (shot (1.0f), "ui_abismo.png");
+        { auto* p = proc->state.getParameter (ParamID::transform); p->setValueNotifyingHost (p->convertTo0to1 (0.0f)); }
+        pump (200);
+        click ("Receta");
         pump (300);
         save (shot (1.0f), "ui_receta.png");
         click ("Cerrar");

@@ -2,6 +2,7 @@
 #include "Widgets.h"
 #include "PluginProcessor.h"
 #include "Presets.h"
+#include "TransformUI.h"
 
 // ===========================================================================
 // Fondo neuronal: una red viva que se vuelve más loca con el sonido
@@ -55,14 +56,19 @@ public:
         crazy = craziness;
     }
 
+    // intensity: 1 en el Cerebro (la red se ve), baja en las otras pestañas (sólo un rastro)
+    float intensity = 1.0f;
+
     void paint (juce::Graphics& g, juce::Rectangle<float> area)
     {
         using namespace NebulaColours;
         const float c = crazy;
-        // Fondo con un leve degradado que se calienta
-        g.setGradientFill (juce::ColourGradient (background.interpolatedWith (juce::Colour (0xff1d0f24), c * 0.8f), area.getCentreX(), area.getCentreY(),
-                                                 juce::Colour (0xff07080c), area.getX(), area.getY(), true));
+        // Fondo grafito con un degradado mínimo (apenas se calienta con la locura)
+        g.setGradientFill (juce::ColourGradient (background.brighter (0.06f).interpolatedWith (juce::Colour (0xff1a1018), c * 0.35f), area.getCentreX(), area.getCentreY() * 0.8f,
+                                                 juce::Colour (0xff08090a), area.getX(), area.getY(), true));
         g.fillRect (area);
+        if (intensity <= 0.01f) return;
+        const float vis = 0.45f * intensity;   // la red queda en segundo plano
 
         auto pos = [&] (const Node& n)
         {
@@ -78,25 +84,25 @@ public:
             {
                 const float d = std::hypot (nodes[i].x - nodes[j].x, (nodes[i].y - nodes[j].y) * 0.66f);
                 if (d > maxD) continue;
-                g.setColour (lineCol.withAlpha ((1.0f - d / maxD) * (0.035f + 0.10f * c)));
+                g.setColour (lineCol.withAlpha ((1.0f - d / maxD) * (0.035f + 0.10f * c) * vis));
                 g.drawLine ({ pos (nodes[i]), pos (nodes[j]) }, 0.8f + c);
             }
         for (auto& n : nodes)
         {
             const auto p = pos (n);
             const float r = 1.0f + 0.7f * (0.5f + 0.5f * std::sin (time * 2.0f + n.phase)) + 1.0f * level;
-            g.setColour (Neural::hot (accent2).withAlpha (0.18f + 0.22f * c));
+            g.setColour (Neural::hot (accent2).withAlpha ((0.18f + 0.22f * c) * vis));
             g.fillEllipse (p.x - r, p.y - r, r * 2.0f, r * 2.0f);
         }
         for (auto& pl : pulses)
         {
             const auto a = pos (nodes[(size_t) pl.a]), b = pos (nodes[(size_t) pl.b]);
             const auto p = a + (b - a) * pl.t;
-            g.setColour (Neural::hot (accent2, 0.2f).withAlpha (0.8f * (1.0f - pl.t)));
+            g.setColour (Neural::hot (accent2, 0.2f).withAlpha (0.8f * (1.0f - pl.t) * vis));
             g.fillEllipse (p.x - 2.5f, p.y - 2.5f, 5.0f, 5.0f);
         }
         // Mucha locura: glitches (franjas desplazadas)
-        if (c > 0.75f)
+        if (c > 0.75f && intensity > 0.5f)
         {
             const int n = (int) ((c - 0.75f) * 8.0f);
             juce::Random r ((juce::int64) (time * 20.0f));
@@ -197,10 +203,10 @@ public:
     {
         using namespace NebulaColours;
         auto r = getLocalBounds().toFloat();
-        g.setColour (panel.withAlpha (0.92f));
-        g.fillRoundedRectangle (r, 8.0f);
-        g.setColour (Neural::hot (panelEdge.brighter (0.15f), 0.2f));
-        g.drawRoundedRectangle (r.reduced (0.5f), 8.0f, 1.0f);
+        g.setColour (panel.withAlpha (0.96f));
+        g.fillRoundedRectangle (r, 6.0f);
+        g.setColour (panelEdge);
+        g.drawRoundedRectangle (r.reduced (0.5f), 6.0f, 1.0f);
 
         // Medidor de locura bajo la perilla LOCURA
         const auto kb = knobs[4]->getBounds().toFloat();
@@ -208,7 +214,7 @@ public:
         g.setColour (track);
         g.fillRoundedRectangle (meter, 2.5f);
         const float c = Neural::level();
-        g.setGradientFill (juce::ColourGradient (accent2, 0.0f, meter.getBottom(), juce::Colour (0xffff3f7a), 0.0f, meter.getY(), false));
+        g.setGradientFill (juce::ColourGradient (accent2, 0.0f, meter.getBottom(), warm, 0.0f, meter.getY(), false));
         g.fillRoundedRectangle (meter.withTop (meter.getBottom() - meter.getHeight() * c), 2.5f);
 
         g.setColour (textDim);
@@ -413,8 +419,10 @@ public:
         delayOn (p.state, ParamID::fxDelayOn, "", Icons::power(), "Encender / apagar el delay"),
         revOn (p.state, ParamID::fxRevOn, "", Icons::power(), "Encender / apagar la reverb"),
         delayPing (p.state, ParamID::fxDelayPing, "Ping pong", Icons::serial(), "Las repeticiones rebotan de izquierda a derecha"),
-        delaySync (p.state, ParamID::fxDelaySync, "Tiempo", "Tiempo de las repeticiones: al tempo del proyecto o libre en ms")
+        delaySync (p.state, ParamID::fxDelaySync, "Tiempo", "Tiempo de las repeticiones: al tempo del proyecto o libre en ms"),
+        transform (p)
     {
+        addAndMakeVisible (transform);
         auto k = [this] (const char* id, const char* name, const char* tip) { knobs.push_back (std::make_unique<NebKnob> (proc.state, id, name, tip)); addAndMakeVisible (*knobs.back()); return knobs.back().get(); };
         eq   = { k (ParamID::fxEqLow, "Graves", "Estante de graves (120 Hz)"), k (ParamID::fxEqMid, "Medios", "Campana de medios"),
                  k (ParamID::fxEqMidFreq, "Frecuencia", "Donde actua la banda de medios"), k (ParamID::fxEqHigh, "Agudos", "Estante de agudos (6 kHz)") };
@@ -438,9 +446,14 @@ public:
         drawSection (g, rDelay, "DELAY", &iDl);
         drawSection (g, rRev, "REVERB", &iRv);
         drawSection (g, rWidth, "ESTEREO", &iW);
+        drawSection (g, rTransform, "COSMOS / ABISMO", nullptr, NebulaColours::accent);
         g.setColour (NebulaColours::textDim);
         g.setFont (juce::FontOptions (11.0f));
-        g.drawFittedText ("Orden: EQ > Compresor > Chorus > Delay > Reverb > Ancho.\nLas macros Movimiento y Espacio tambien mueven el chorus, el delay y la reverb.",
+        g.drawFittedText ("Transforma la estructura del sonido de cada voz (antes de los filtros y de estos efectos).",
+                          rTransform.reduced (14, 0).withTrimmedTop (rTransform.getHeight() - 22), juce::Justification::centredLeft, 1);
+        g.setColour (NebulaColours::textDim);
+        g.setFont (juce::FontOptions (11.0f));
+        g.drawFittedText ("Orden: Cosmos/Abismo (por voz) > EQ > Compresor > Chorus > Delay > Reverb > Ancho.",
                           rWidth.reduced (12).withTrimmedTop (width != nullptr ? width->getBottom() - rWidth.getY() + 4 : 120), juce::Justification::topLeft, 6);
     }
 
@@ -448,6 +461,9 @@ public:
     {
         auto r = getLocalBounds();
         constexpr int gap = 10;
+        rTransform = r.removeFromBottom (juce::jmin (130, r.getHeight() / 4));
+        r.removeFromBottom (gap);
+        transform.setBounds (rTransform.reduced (16, 0).withTrimmedTop (30).withTrimmedBottom (24));
         auto top = r.removeFromTop ((r.getHeight() - gap) / 2);
         r.removeFromTop (gap);
         rEq = top.removeFromLeft (top.getWidth() * 4 / 10); top.removeFromLeft (gap);
@@ -485,5 +501,6 @@ private:
     NebKnob* width = nullptr;
     IconToggle eqOn, compOn, chorusOn, delayOn, revOn, delayPing;
     ParamCombo delaySync;
-    juce::Rectangle<int> rEq, rComp, rChorus, rDelay, rRev, rWidth;
+    TransformStrip transform;
+    juce::Rectangle<int> rEq, rComp, rChorus, rDelay, rRev, rWidth, rTransform;
 };

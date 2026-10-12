@@ -8,15 +8,16 @@
 // ===========================================================================
 namespace NebulaColours
 {
-    inline const juce::Colour background { 0xff101218 };
-    inline const juce::Colour panel      { 0xff1a1d25 };
-    inline const juce::Colour panelEdge  { 0xff303541 };
-    inline const juce::Colour track      { 0xff272c36 };
-    inline const juce::Colour accent     { 0xff8d9fe8 }; // violeta
-    inline const juce::Colour accent2    { 0xff79b8b0 }; // turquesa
-    inline const juce::Colour warm       { 0xffd69c7b }; // naranja (filtro 2, avisos)
-    inline const juce::Colour text       { 0xffe8eaf0 };
-    inline const juce::Colour textDim    { 0xff9299a8 };
+    // Grafito: fondo casi negro, paneles apenas más claros, un solo acento frío y uno cálido
+    inline const juce::Colour background { 0xff0c0d0f };
+    inline const juce::Colour panel      { 0xff15171a };
+    inline const juce::Colour panelEdge  { 0xff26292e };
+    inline const juce::Colour track      { 0xff1d2024 };
+    inline const juce::Colour accent     { 0xff9fb3e6 }; // azul hielo (acción principal, Cosmos)
+    inline const juce::Colour accent2    { 0xff8cc4bb }; // verde agua apagado (estado, señal)
+    inline const juce::Colour warm       { 0xffd98a6a }; // brasa (filtro 2, avisos, Abismo)
+    inline const juce::Colour text       { 0xffe4e6ea };
+    inline const juce::Colour textDim    { 0xff858b95 };
 }
 
 // Estado "neuronal" de la interfaz: qué tan loco está el sonido (0..1) y el reloj de animación
@@ -27,10 +28,12 @@ namespace Neural
     // Los colores se calientan con la locura: turquesa/violeta -> magenta -> naranja
     inline juce::Colour hot (juce::Colour base, float extra = 0.0f)
     {
+        // (interfaz minimalista: el calor tiñe, no pinta; como mucho 55 % hacia el color caliente)
         const float c = juce::jlimit (0.0f, 1.0f, level() + extra);
         if (c < 0.02f) return base;
-        const auto mid = juce::Colour (0xffff3fb4), top = juce::Colour (0xffff8a3d);
-        return c < 0.6f ? base.interpolatedWith (mid, c / 0.6f) : mid.interpolatedWith (top, (c - 0.6f) / 0.4f);
+        const auto mid = juce::Colour (0xffd877b0), top = juce::Colour (0xffe0895c);
+        const auto hotC = c < 0.6f ? mid : mid.interpolatedWith (top, (c - 0.6f) / 0.4f);
+        return base.interpolatedWith (hotC, 0.55f * juce::jmin (1.0f, c / 0.6f));
     }
 }
 
@@ -225,14 +228,15 @@ public:
         {
             auto r = cell (i).toFloat().reduced (1.5f);
             const bool sel = i == current, over = i == hover;
-            g.setColour (sel ? colour.withAlpha (0.85f) : (over ? track.brighter (0.15f) : track));
-            g.fillRoundedRectangle (r, 5.0f);
+            g.setColour (sel ? colour.withAlpha (0.16f) : (over ? track.brighter (0.12f) : track));
+            g.fillRoundedRectangle (r, 4.0f);
+            if (sel) { g.setColour (colour.withAlpha (0.75f)); g.drawRoundedRectangle (r.reduced (0.5f), 4.0f, 1.0f); }
             auto iconArea = r.reduced (r.getWidth() * 0.16f, 3.0f);
             if (caps.size() > i) iconArea = iconArea.withTrimmedBottom (12.0f);
-            Icons::draw (g, iconFor (i), iconArea, sel ? juce::Colours::white : textDim.brighter (over ? 0.4f : 0.0f), 1.6f);
+            Icons::draw (g, iconFor (i), iconArea, sel ? colour.brighter (0.3f) : textDim.brighter (over ? 0.4f : 0.0f), 1.5f);
             if (caps.size() > i)
             {
-                g.setColour (sel ? juce::Colours::white : textDim);
+                g.setColour (sel ? text : textDim);
                 g.setFont (juce::FontOptions (10.0f));
                 g.drawText (caps[i], r.removeFromBottom (13.0f), juce::Justification::centred);
             }
@@ -296,17 +300,18 @@ public:
         const bool on = getToggleState();
         const float alpha = isEnabled() ? 1.0f : 0.35f;
         const auto col = Neural::hot (colour, 0.0f);
-        g.setColour ((on ? col.withAlpha (0.85f) : (down ? track.brighter (0.25f) : over ? track.brighter (0.12f) : track)).withMultipliedAlpha (alpha));
-        g.fillRoundedRectangle (r, 6.0f);
-        if (filled && ! on)
+        // plano: fondo apenas marcado; encendido = tinte del color + borde fino; "filled" = acción principal
+        g.setColour ((down ? track.brighter (0.2f) : over ? track.brighter (0.1f) : track).withMultipliedAlpha (alpha));
+        g.fillRoundedRectangle (r, 5.0f);
+        if (on || filled)
         {
-            g.setColour (col.withAlpha (0.35f * alpha));
-            g.fillRoundedRectangle (r, 6.0f);
+            g.setColour (col.withAlpha ((on ? 0.22f : 0.14f) * alpha));
+            g.fillRoundedRectangle (r, 5.0f);
         }
-        g.setColour ((on ? col : panelEdge.brighter (over ? 0.4f : 0.1f)).withMultipliedAlpha (alpha));
-        g.drawRoundedRectangle (r.reduced (0.5f), 6.0f, 1.0f);
+        g.setColour ((on ? col.withAlpha (0.9f) : filled ? col.withAlpha (0.45f) : panelEdge.brighter (over ? 0.35f : 0.0f)).withMultipliedAlpha (alpha));
+        g.drawRoundedRectangle (r.reduced (0.5f), 5.0f, 1.0f);
 
-        const auto ink = (on || filled ? juce::Colours::white : NebulaColours::text).withMultipliedAlpha (alpha);
+        const auto ink = (on ? col.brighter (0.35f) : filled ? NebulaColours::text : NebulaColours::text.withAlpha (0.88f)).withMultipliedAlpha (alpha);
         const auto caption = getButtonText();
         if (caption.isEmpty())
             Icons::draw (g, icon, r.reduced (r.getHeight() * 0.2f), ink, 1.7f);
@@ -384,36 +389,22 @@ private:
 inline void drawSection (juce::Graphics& g, juce::Rectangle<int> area, const juce::String& title, const juce::Path* icon = nullptr,
                          juce::Colour accentColour = NebulaColours::accent2)
 {
+    // Panel discreto: fondo plano, borde de 1 px y título pequeño espaciado. Sin brillos.
     using namespace NebulaColours;
+    juce::ignoreUnused (icon);
     const auto r = area.toFloat();
-    const float cr = Neural::level();
-    g.setColour (panel.withAlpha (0.94f));
-    g.fillRoundedRectangle (r, 8.0f);
-    // Borde que "brilla" más entre más loco está el sonido
-    const auto edge = Neural::hot (panelEdge.brighter (0.15f), cr * 0.3f);
-    if (cr > 0.05f)
-    {
-        g.setColour (Neural::hot (accentColour).withAlpha (0.12f + 0.25f * cr));
-        g.drawRoundedRectangle (r.expanded (1.5f), 9.0f, 2.0f + 2.0f * cr);
-    }
-    g.setColour (edge);
-    g.drawRoundedRectangle (r.reduced (0.5f), 8.0f, 1.0f);
-    float x = r.getX() + 10.0f;
-    const auto ac = Neural::hot (accentColour, 0.0f);
-    if (icon != nullptr)
-    {
-        Icons::draw (g, *icon, { x, r.getY() + 7.0f, 16.0f, 16.0f }, ac, 1.5f);
-        x += 21.0f;
-    }
-    else
-    {
-        g.setColour (ac);
-        g.fillRoundedRectangle (x, r.getY() + 10.0f, 3.0f, 11.0f, 1.5f);
-        x += 9.0f;
-    }
-    g.setColour (text);
-    g.setFont (juce::FontOptions (11.5f, juce::Font::bold));
-    g.drawText (title, (int) x, (int) r.getY() + 6, (int) r.getWidth() - 40, 20, juce::Justification::centredLeft);
+    g.setColour (panel.withAlpha (0.96f));
+    g.fillRoundedRectangle (r, 6.0f);
+    g.setColour (panelEdge);
+    g.drawRoundedRectangle (r.reduced (0.5f), 6.0f, 1.0f);
+    const float x = r.getX() + 12.0f;
+    g.setColour (Neural::hot (accentColour).withAlpha (0.9f));
+    g.fillEllipse (x, r.getY() + 13.0f, 4.0f, 4.0f);
+    g.setColour (textDim.brighter (0.25f));
+    juce::Font f (juce::FontOptions (10.5f, juce::Font::bold));
+    f.setExtraKerningFactor (0.08f);
+    g.setFont (f);
+    g.drawText (title.toUpperCase(), (int) x + 10, (int) r.getY() + 5, (int) r.getWidth() - 60, 20, juce::Justification::centredLeft);
 }
 
 // Ayuda: asigna un valor real a un parámetro como gesto completo
