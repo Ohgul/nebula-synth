@@ -116,6 +116,24 @@ int NEBULA_TEST_ENTRY (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI gui;
     const Bench::Variant v {};
+    // FORGE 2.0: una cola cortada debe perder frente a una referencia idéntica.
+    // Evalúa el mismo audio con y sin los últimos 300 ms: protege el término
+    // temporal añadido a fastLoss sin depender de la búsqueda estocástica.
+    {
+        auto pad = Bench::lead (v);
+        auto ref = Forge::analyse (pad.audio, sr, "tail-regression");
+        Forge::Evaluator evaluator (ref);
+        const auto& original = ref.tuned;
+        juce::AudioBuffer<float> truncated (original);
+        const int cut = juce::jmax (0, truncated.getNumSamples() - (int) (0.3 * sr));
+        for (int ch = 0; ch < truncated.getNumChannels(); ++ch)
+            truncated.clear (ch, cut, truncated.getNumSamples() - cut);
+        const double intactLoss = evaluator.fastLoss (original);
+        const double truncatedLoss = evaluator.fastLoss (truncated);
+        check ("FORGE 2.0: penaliza recorte de cola", std::isfinite (intactLoss)
+               && std::isfinite (truncatedLoss) && truncatedLoss > intactLoss,
+               juce::String (intactLoss, 3) + " -> " + juce::String (truncatedLoss, 3));
+    }
 
     if (argc > 1 && juce::String (argv[1]) == "tiempo")
     {
