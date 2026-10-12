@@ -170,6 +170,31 @@ namespace ParamID
     // ---- v3: interpretación (no se guardan en el genoma) ----
     inline constexpr const char* quality = "quality";
     inline constexpr const char* mpeOn   = "mpeOn";
+
+    // ---- v3.1: ADN del sonido recreado (todos neutros por defecto: los proyectos anteriores suenan igual) ----
+    // A · Identidad tonal
+    inline constexpr const char* dnaPitchDepth = "dnaPitchDepth";   // profundidad de la curva de tono (vibrato, glides, caídas)
+    inline constexpr const char* dnaFormant    = "dnaFormant";      // desplaza los formantes sin mover la nota
+    // B · Estructura armónica
+    inline constexpr const char* dnaTilt       = "dnaTilt";         // inclinación espectral (dB/octava)
+    inline constexpr const char* dnaTiltEvolve = "dnaTiltEvolve";   // inclinación que cambia del ataque al final
+    inline constexpr const char* dnaOddEven    = "dnaOddEven";      // pares / impares
+    inline constexpr const char* dnaHarmonics  = "dnaHarmonics";    // cantidad de armónicos
+    // C · Textura
+    inline constexpr const char* dnaNoiseTilt  = "dnaNoiseTilt";    // color del ruido
+    inline constexpr const char* dnaRough      = "dnaRough";        // aspereza
+    inline constexpr const char* dnaDensity    = "dnaDensity";      // densidad (copias desafinadas)
+    // D · Comportamiento temporal
+    inline constexpr const char* dnaAttack     = "dnaAttack";       // estira o comprime el ataque
+    inline constexpr const char* dnaTransient  = "dnaTransient";    // nivel del golpe/cabeza original
+    inline constexpr const char* dnaRelease    = "dnaRelease";      // estira o comprime la cola
+    // E · Movimiento
+    inline constexpr const char* dnaEvolve     = "dnaEvolve";       // cuánto cambia el timbre en el tiempo
+    inline constexpr const char* dnaHold       = "dnaHold";         // al sostener: recorrer o congelar
+    // F · Transformación
+    inline constexpr const char* transform     = "transform";       // ABISMO (-1) ← ORIGINAL (0) → COSMOS (+1)
+    inline constexpr const char* identity      = "identity";        // cuánto del original se conserva al transformar
+    inline constexpr const char* transformOut  = "transformOut";    // nivel de salida de Cosmos/Abismo (dB)
 }
 
 // ---------------------------------------------------------------------------
@@ -202,6 +227,7 @@ inline const juce::StringArray& lfoShapeNames() { static const juce::StringArray
 inline const juce::StringArray& polyNames()     { static const juce::StringArray n { "Poli", "Mono", "Legato" }; return n; }
 namespace GrainType { enum { Smooth, Sharp, Scatter, Reverse, Octave, count }; }
 inline const juce::StringArray& grainTypeNames() { static const juce::StringArray n { "Suave", "Nitido", "Disperso", "Reversa", "Octava" }; return n; }
+inline const juce::StringArray& holdNames()     { static const juce::StringArray n { "Recorrer", "Congelar" }; return n; }
 inline const juce::StringArray& engineNames()   { static const juce::StringArray n { "Sinte", "Sample", "Resintesis" }; return n; }
 namespace Engine { enum { Synth, Sample, Resynth }; }
 inline const juce::StringArray& qualityNames()  { static const juce::StringArray n { "Normal", "Alta (2x)", "Ultra (4x)" }; return n; }
@@ -258,6 +284,8 @@ namespace ParamFormat
     inline juce::String cents (float c, int)     { auto r = juce::roundToInt (c); return (r > 0 ? "+" : "") + juce::String (r) + " ct"; }
     inline juce::String decibels (float db, int) { return db <= -59.9f ? juce::String ("-inf") : juce::String (db, 1) + " dB"; }
     inline juce::String times (float x, int)     { return "x" + juce::String (x, 2); }
+    inline juce::String semis (float st, int)    { return (st > 0.05f ? "+" : "") + juce::String (st, 1) + " st"; }
+    inline juce::String dbOct (float d, int)     { return (d > 0.05f ? "+" : "") + juce::String (d, 1) + " dB/oct"; }
     inline juce::String curve (float c, int)
     {
         if (std::abs (c) < 0.02f) return "Lineal";
@@ -467,6 +495,27 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
 
     add (new F ({ ParamID::master, 1 }, "Volumen", NormalisableRange<float> (-60.0f, 6.0f), -6.0f, Attr().withStringFromValueFunction (ParamFormat::decibels)));
 
+    // ---- ADN (v3.1) ----
+    auto timesAttr = Attr().withStringFromValueFunction (ParamFormat::times);
+    NormalisableRange<float> scaleRange (0.25f, 4.0f); scaleRange.setSkewForCentre (1.0f);
+    add (new F ({ ParamID::dnaPitchDepth, 1 }, "ADN Profundidad de tono", NormalisableRange<float> (0.0f, 2.0f), 1.0f, timesAttr));
+    add (new F ({ ParamID::dnaFormant, 1 }, "ADN Formantes", NormalisableRange<float> (-12.0f, 12.0f), 0.0f, Attr().withStringFromValueFunction (ParamFormat::semis)));
+    add (new F ({ ParamID::dnaTilt, 1 }, "ADN Brillo", NormalisableRange<float> (-12.0f, 12.0f), 0.0f, Attr().withStringFromValueFunction (ParamFormat::dbOct)));
+    add (new F ({ ParamID::dnaTiltEvolve, 1 }, "ADN Brillo en el tiempo", NormalisableRange<float> (-12.0f, 12.0f), 0.0f, Attr().withStringFromValueFunction (ParamFormat::dbOct)));
+    add (new F ({ ParamID::dnaOddEven, 1 }, "ADN Pares/Impares", bip, 0.0f, Attr().withStringFromValueFunction (ParamFormat::bipolar)));
+    add (new F ({ ParamID::dnaHarmonics, 1 }, "ADN Armonicos", unit, 1.0f, pct));
+    add (new F ({ ParamID::dnaNoiseTilt, 1 }, "ADN Color del ruido", bip, 0.0f, Attr().withStringFromValueFunction (ParamFormat::bipolar)));
+    add (new F ({ ParamID::dnaRough, 1 }, "ADN Aspereza", unit, 0.0f, pct));
+    add (new F ({ ParamID::dnaDensity, 1 }, "ADN Densidad", unit, 0.0f, pct));
+    add (new F ({ ParamID::dnaAttack, 1 }, "ADN Ataque", scaleRange, 1.0f, timesAttr));
+    add (new F ({ ParamID::dnaTransient, 1 }, "ADN Golpe", NormalisableRange<float> (0.0f, 2.0f), 1.0f, timesAttr));
+    add (new F ({ ParamID::dnaRelease, 1 }, "ADN Cola", scaleRange, 1.0f, timesAttr));
+    add (new F ({ ParamID::dnaEvolve, 1 }, "ADN Evolucion", NormalisableRange<float> (0.0f, 2.0f), 1.0f, timesAttr));
+    add (new C ({ ParamID::dnaHold, 1 }, "ADN Al sostener", holdNames(), 0));
+    add (new F ({ ParamID::transform, 1 }, "Abismo - Original - Cosmos", bip, 0.0f, Attr().withStringFromValueFunction (ParamFormat::bipolar)));
+    add (new F ({ ParamID::identity, 1 }, "Identidad", unit, 0.0f, pct));
+    add (new F ({ ParamID::transformOut, 1 }, "Cosmos/Abismo Salida", NormalisableRange<float> (-24.0f, 6.0f), 0.0f, Attr().withStringFromValueFunction (ParamFormat::decibels)));
+
     return { p.begin(), p.end() };
 }
 
@@ -495,6 +544,8 @@ namespace P
         fxChorusOn, fxChorusRate, fxChorusDepth, fxChorusMix,
         fxDelayOn, fxDelaySync, fxDelayMs, fxDelayFb, fxDelayMix, fxDelayPing, fxDelayTone,
         fxRevOn, fxRevSize, fxRevDecay, fxRevDamp, fxRevPre, fxRevMix, fxWidth, quality, mpeOn, master,
+        dnaPitchDepth, dnaFormant, dnaTilt, dnaTiltEvolve, dnaOddEven, dnaHarmonics, dnaNoiseTilt, dnaRough, dnaDensity,
+        dnaAttack, dnaTransient, dnaRelease, dnaEvolve, dnaHold, transform, identity, transformOut,
         count
     };
 
@@ -522,7 +573,10 @@ namespace P
             ParamID::fxChorusOn, ParamID::fxChorusRate, ParamID::fxChorusDepth, ParamID::fxChorusMix,
             ParamID::fxDelayOn, ParamID::fxDelaySync, ParamID::fxDelayMs, ParamID::fxDelayFb, ParamID::fxDelayMix, ParamID::fxDelayPing, ParamID::fxDelayTone,
             ParamID::fxRevOn, ParamID::fxRevSize, ParamID::fxRevDecay, ParamID::fxRevDamp, ParamID::fxRevPre, ParamID::fxRevMix, ParamID::fxWidth,
-            ParamID::quality, ParamID::mpeOn, ParamID::master
+            ParamID::quality, ParamID::mpeOn, ParamID::master,
+            ParamID::dnaPitchDepth, ParamID::dnaFormant, ParamID::dnaTilt, ParamID::dnaTiltEvolve, ParamID::dnaOddEven, ParamID::dnaHarmonics,
+            ParamID::dnaNoiseTilt, ParamID::dnaRough, ParamID::dnaDensity, ParamID::dnaAttack, ParamID::dnaTransient, ParamID::dnaRelease,
+            ParamID::dnaEvolve, ParamID::dnaHold, ParamID::transform, ParamID::identity, ParamID::transformOut
         };
         static_assert (sizeof (list) / sizeof (list[0]) == count, "lista de parámetros incompleta");
         return list;

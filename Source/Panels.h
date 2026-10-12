@@ -6,11 +6,13 @@
 inline void drawOverlayFrame (juce::Graphics& g, juce::Rectangle<int> bounds, const juce::Path& icon, const juce::String& title, const juce::String& subtitle)
 {
     using namespace NebulaColours;
-    g.setColour (juce::Colour (0xf4151824));
-    g.fillRoundedRectangle (bounds.toFloat(), 10.0f);
-    g.setColour (accent.withAlpha (0.6f));
-    g.drawRoundedRectangle (bounds.toFloat().reduced (0.5f), 10.0f, 1.2f);
-    Icons::draw (g, icon, { 16.0f, 12.0f, 18.0f, 18.0f }, accent2, 1.5f);
+    g.setColour (juce::Colours::black.withAlpha (0.35f));
+    g.fillRoundedRectangle (bounds.toFloat().translated (0.0f, 4.0f), 8.0f);   // sombra corta
+    g.setColour (panel.withAlpha (0.985f));
+    g.fillRoundedRectangle (bounds.toFloat(), 8.0f);
+    g.setColour (panelEdge.brighter (0.15f));
+    g.drawRoundedRectangle (bounds.toFloat().reduced (0.5f), 8.0f, 1.0f);
+    Icons::draw (g, icon, { 16.0f, 12.0f, 18.0f, 18.0f }, accent, 1.4f);
     g.setColour (text);
     g.setFont (juce::FontOptions (14.0f, juce::Font::bold));
     g.drawText (title, 42, 10, bounds.getWidth() - 60, 22, juce::Justification::centredLeft);

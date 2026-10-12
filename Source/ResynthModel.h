@@ -32,6 +32,17 @@ struct ResynthModel
     // Curvas densas (para frases y ataques): volumen de la parte armónica y tono, en cents
     float envHop = 0.005f, pitchHop = 0.01f;
     std::vector<float> harmEnv, pitchCurve;
+    // Capa de transitorio (formato 4): el click/golpe del ataque como audio corto, a la frecuencia del sample.
+    // Se toca al empezar la nota, transpuesto con la tecla. Vacía = sin capa (como en los modelos v3).
+    std::vector<float> transient;
+    float transientRate = 48000.0f;
+    // Si headStart > 0, el transitorio es la "cabeza" del original: hasta headStart (muestras del transitorio)
+    // la resíntesis calla; ahí su fase salta a headPhase (ciclos) y entra en headXf muestras mientras la cabeza sale.
+    float headStart = 0.0f, headXf = 0.0f, headPhase = 0.0f;
+    // Sostenido (formato 4): mientras se mantiene la nota se recorre el cuerpo [loopStart, releaseStart] de ida y
+    // vuelta, con su evolución real; al soltar, la lectura va al comienzo de la cola real y la toca hasta el final.
+    float loopStart = -1.0f, releaseStart = -1.0f;
+    bool hasLoop() const { return loopStart >= 0.0f && releaseStart > loopStart + 0.2f && ! times.empty() && releaseStart <= times.back() + 0.05f; }
 
     static float curveAt (const std::vector<float>& c, float hop, double t)
     {
@@ -74,7 +85,8 @@ struct ResynthModel
     juce::String toBase64() const
     {
         juce::MemoryOutputStream mo;
-        mo.writeInt (3);   // versión del formato
+        const bool v4 = ! transient.empty() || hasLoop();
+        mo.writeInt (v4 ? 4 : 3);   // versión del formato (sin transitorio se guarda igual que en v3)
         mo.writeString (name);
         mo.writeFloat (rootNote);
         mo.writeBool (sustained);
@@ -95,6 +107,12 @@ struct ResynthModel
         mo.writeString (harmonic != nullptr ? harmonic->toBase64() : juce::String());
         mo.writeFloat (envHop); mo.writeInt ((int) harmEnv.size()); for (auto v : harmEnv) mo.writeFloat (v);
         mo.writeFloat (pitchHop); mo.writeInt ((int) pitchCurve.size()); for (auto v : pitchCurve) mo.writeFloat (v);
+        if (v4)
+        {
+            mo.writeFloat (transientRate); mo.writeInt ((int) transient.size()); for (auto v : transient) mo.writeFloat (v);
+            mo.writeFloat (headStart); mo.writeFloat (headXf); mo.writeFloat (headPhase);
+            mo.writeFloat (loopStart); mo.writeFloat (releaseStart);
+        }
         return mo.getMemoryBlock().toBase64Encoding();
     }
 
@@ -103,7 +121,8 @@ struct ResynthModel
         juce::MemoryBlock mb;
         if (! mb.fromBase64Encoding (s)) return nullptr;
         juce::MemoryInputStream in (mb, false);
-        if (in.readInt() != 3) return nullptr;
+        const int version = in.readInt();
+        if (version != 3 && version != 4) return nullptr;
         auto m = std::make_shared<ResynthModel>();
         m->name = in.readString();
         m->rootNote = in.readFloat();
@@ -139,6 +158,15 @@ struct ResynthModel
         const int npc = in.readInt();
         if (npc < 0 || npc > 200000) return nullptr;
         m->pitchCurve.resize ((size_t) npc); for (auto& v : m->pitchCurve) v = in.readFloat();
+        if (version >= 4)
+        {
+            m->transientRate = in.readFloat();
+            const int nt = in.readInt();
+            if (nt < 0 || nt > 48000 * 2 || ! (m->transientRate > 1000.0f)) return nullptr;
+            m->transient.resize ((size_t) nt); for (auto& v : m->transient) v = in.readFloat();
+            m->headStart = in.readFloat(); m->headXf = in.readFloat(); m->headPhase = in.readFloat();
+            m->loopStart = in.readFloat(); m->releaseStart = in.readFloat();
+        }
         return m;
     }
 };
@@ -187,7 +215,11 @@ public:
     void start (std::shared_ptr<const ResynthModel> m, juce::Random& r)
     {
         model = std::move (m);
+        prevModel = nullptr; xfade = 0.0f;
         t = 0.0;
+        trPos = 0.0;
+        dir = 1.0; released = false;
+        phase2 = 0.37; phase3 = 0.71; roughPhase = 0.0;
         phase = 0.0;
         for (auto& p : ph) p = { 1.0, 0.0 };
         for (size_t k = 0; k < ph.size(); ++k)
@@ -204,6 +236,42 @@ public:
     }
 
     bool hasModel() const { return model != nullptr && model->frames() >= 2; }
+    // Cola real (modelos con sostenido): la voz deja de usar su envolvente de suelta y espera a que termine
+    bool hasRealTail() const { return hasModel() && model->hasLoop(); }
+    void release() { released = true; }
+
+    // ADN en tiempo real (lo pone la voz en cada bloque)
+    struct Genes { float pitchDepth = 1.0f, attack = 1.0f, release = 1.0f, transient = 1.0f, noiseTilt = 0.0f, rough = 0.0f, density = 0.0f; bool freeze = false; };
+    void setGenes (const Genes& g) { genes = g; }
+
+    // Cosmos/Abismo sobre el recorrido del modelo (lo pone la voz en cada bloque)
+    struct Morph { float speedMul = 1.0f, wander = 0.0f, ghost = 0.0f, jumps = 0.0f; };
+    void setMorph (const Morph& mo) { morph = mo; }
+    void seedMorph (juce::int64 seed) { morphRng.setSeed (seed); wanderPhase = morphRng.nextDouble(); ghostL = ghostR = 0.0; posSmInit = false; }
+
+    // Cambia a una variante del mismo modelo (mismo número de cuadros) sin cortar la nota: así los genes
+    // estructurales del ADN también se oyen en notas que ya están sonando y se pueden automatizar.
+    void swapModel (std::shared_ptr<const ResynthModel> m)
+    {
+        if (m != nullptr && model != nullptr && m != model && m->frames() == model->frames()
+            && m->partials.size() == model->partials.size() && m->transient.size() == model->transient.size())
+        {
+            // la tabla nueva entra con un fundido de 30 ms (cambiar de forma de onda de golpe hace clic)
+            // la ganancia en curso lleva el nivel de la tabla anterior: se pasa a la escala de la nueva
+            if (model->harmonicLevel > 1.0e-9f)
+            {
+                const float k = m->harmonicLevel / model->harmonicLevel;
+                harmGain *= k; harmTarget *= k; harmStep *= k;
+            }
+            prevModel = model;
+            model = std::move (m);
+            xfade = 1.0f;
+            xfadeStep = (float) (1.0 / (0.03 * sr));
+        }
+    }
+    const ResynthModel* current() const { return model.get(); }
+    // termina 30 ms después del último cuadro, con un fundido (antes se cortaba de golpe y hacía clic)
+    bool finished() const { return hasRealTail() && released && t >= (double) model->times.back() + tailFadeS; }
 
     // Se llama cada "controlRate" muestras: avanza el tiempo y calcula los objetivos
     void control (double noteHz, float speed, float harm, float partials, float noiseAmt, float stretch, bool followPitch, int samples)
@@ -211,8 +279,16 @@ public:
         if (! hasModel()) return;
         const auto& m = *model;
         double tt = t;
-        if (m.sustained) tt = juce::jmin (tt, (double) m.times.back());
+        if (m.hasLoop()) tt = juce::jlimit (0.0, (double) m.times.back(), t);
+        else if (m.sustained) tt = juce::jmin (tt, (double) m.times.back());
         frame = m.frameAt (tt);
+        if (morph.wander > 0.0f && m.frames() > 1)
+        {
+            // Cosmos: el timbre deriva despacio alrededor de donde va
+            wanderPhase += 0.05 * samples / sr; wanderPhase -= std::floor (wanderPhase);
+            const float off = morph.wander * (float) (m.frames() - 1) * (float) std::sin (juce::MathConstants<double>::twoPi * wanderPhase);
+            frame = juce::jlimit (0.0f, (float) (m.frames() - 1), frame + off);
+        }
         const int f0 = (int) frame, f1 = juce::jmin (m.frames() - 1, f0 + 1);
         const float w = frame - (float) f0;
         auto lerp = [w] (float a, float b) { return a + (b - a) * w; };
@@ -223,11 +299,21 @@ public:
             if (! m.pitchCurve.empty()) cents = ResynthModel::curveAt (m.pitchCurve, m.pitchHop, tt);
             else if (! m.pitchCents.empty()) cents = lerp (m.pitchCents[(size_t) f0], m.pitchCents[(size_t) f1]);
         }
-        hz = noteHz * std::exp2 (cents / 1200.0);
+        hz = noteHz * std::exp2 (cents * genes.pitchDepth / 1200.0);
+        // el transitorio se transpone con la tecla (sin la curva de tono: es el golpe, no la nota)
+        trStep = m.transient.empty() ? 0.0 : (noteHz / (440.0 * std::exp2 ((m.rootNote - 69.0) / 12.0))) * m.transientRate / sr;
         const float env = m.harmEnv.empty() ? 1.0f : ResynthModel::curveAt (m.harmEnv, m.envHop, tt);
         harmTarget = harm * m.harmonicLevel * env;
         harmStep = (harmTarget - harmGain) / (float) juce::jmax (1, samples);
         position = m.frames() > 1 ? frame / (float) (m.frames() - 1) : 0.0f;
+        if (morph.jumps > 0.0f || morph.wander > 0.0f)
+        {
+            // con saltos o deriva, la posición en la tabla se desliza (~10 ms) en vez de saltar
+            if (! posSmInit) { posSm = position; posSmInit = true; }
+            posSm += (position - posSm) * (float) juce::jmin (1.0, samples / (0.01 * sr));
+            position = posSm;
+        }
+        else posSmInit = false;
 
         rampLen = juce::jmax (1, samples);
         const double nyq = sr * 0.45;
@@ -253,10 +339,40 @@ public:
             {
                 const int nf0 = juce::jmin ((int) m.noise.size() - 1, f0), nf1 = juce::jmin ((int) m.noise.size() - 1, f1);
                 target = noiseAmt * lerp (m.noise[(size_t) nf0][(size_t) b], m.noise[(size_t) nf1][(size_t) b]) * bands[(size_t) b].norm;
+                if (genes.noiseTilt != 0.0f)   // color del ruido: ±12 dB de inclinación de graves a agudos
+                    target *= std::pow (10.0f, genes.noiseTilt * 12.0f * ((float) b / (ResynthModel::numBands - 1) - 0.5f) / 20.0f);
             }
             bandStep[(size_t) b] = (target - bandAmp[(size_t) b]) / (float) rampLen;
         }
-        t += speed * samples / sr;
+        double adv = speed * samples / sr;
+        // Cosmos: el cuerpo del sonido se recorre más despacio (el ataque no se toca)
+        if (morph.speedMul != 1.0f && t >= (m.hasLoop() ? (double) m.loopStart : juce::jmin (0.3, 0.25 * (double) m.times.back()))) adv *= morph.speedMul;
+        if (morph.jumps > 0.0f && morphRng.nextFloat() < morph.jumps * (float) samples / (float) sr)
+        {
+            // Abismo: salta a otro punto del sonido (dentro del cuerpo si lo tiene) y a veces lo recorre al revés
+            const double end = m.hasLoop() ? (double) m.releaseStart : (double) m.times.back();
+            const double start = m.hasLoop() && ! released ? (double) m.loopStart * morphRng.nextDouble() : 0.0;
+            if (! released) { t = start + morphRng.nextDouble() * juce::jmax (0.0, end - start); dir = morphRng.nextFloat() < 0.5f ? -1.0 : 1.0; }
+        }
+        // Ataque y cola del ADN: estiran o comprimen esos tramos del tiempo del modelo
+        const double attackEnd = m.hasLoop() ? (double) m.loopStart : juce::jmin (0.3, 0.25 * (double) m.times.back());
+        if (t < attackEnd) adv /= juce::jmax (0.05f, genes.attack);
+        if (released && m.hasLoop() && t >= m.releaseStart) adv /= juce::jmax (0.05f, genes.release);
+        if (m.hasLoop())
+        {
+            if (! released && genes.freeze && t >= m.loopStart) { /* congelar: el timbre se queda donde empieza el cuerpo */ }
+            else if (! released)
+            {
+                // ida y vuelta por el cuerpo: la evolución sigue sin saltos ni congelarse
+                t += dir * adv;
+                if (t >= m.releaseStart) { t = 2.0 * m.releaseStart - t; dir = -1.0; }
+                if (dir < 0.0 && t <= m.loopStart) { t = 2.0 * m.loopStart - t; dir = 1.0; }
+            }
+            else if (t < m.releaseStart)
+                t += adv + (m.releaseStart - t) * juce::jmin (1.0, samples / (0.06 * sr));   // llega a la cola en ~60 ms
+            else t += adv;
+        }
+        else t += adv;
         // Renormaliza los fasores (evita que la amplitud se desvíe con el tiempo)
         for (int k = 0; k < np; ++k)
         {
@@ -270,15 +386,62 @@ public:
         if (! hasModel()) return;
         const auto& m = *model;
         float centre = 0.0f;
+        ghostOutL = ghostOutR = 0.0f;
+
+        // Transitorio / cabeza original del ataque
+        float modelGain = 1.0f, trOut = 0.0f;   // la resíntesis entra cuando termina la cabeza
+        if (trStep > 0.0 && trPos < (double) m.transient.size() - 1.0)
+        {
+            const int i0 = (int) trPos; const float fr = (float) (trPos - i0);
+            trOut = (m.transient[(size_t) i0] + (m.transient[(size_t) i0 + 1] - m.transient[(size_t) i0]) * fr) * genes.transient;
+            if (m.headStart > 0.0f)
+            {
+                const double next = trPos + trStep;
+                if (trPos < m.headStart && next >= m.headStart) phase = m.headPhase;   // alinea la fase con el original
+                modelGain = trPos < m.headStart ? 0.0f : juce::jmin (1.0f, (float) ((trPos - m.headStart) / juce::jmax (1.0f, m.headXf)));
+            }
+            trPos += trStep;
+        }
+        else if (trStep > 0.0 && m.headStart > 0.0f && trPos < m.headStart) modelGain = 0.0f;
 
         // Parte armónica (tabla)
         if (m.harmonic != nullptr && (harmGain > 0.0f || harmTarget > 0.0f))
         {
             harmGain += harmStep;
-            const float v = m.harmonic->read (phase, position, Wavetable::mipFor (hz, sr));
+            const int mip = Wavetable::mipFor (hz, sr);
+            float v = m.harmonic->read (phase, position, mip);
+            if (xfade > 0.0f)
+            {
+                if (prevModel != nullptr && prevModel->harmonic != nullptr && m.harmonicLevel > 1.0e-9f)
+                {
+                    const float pv = prevModel->harmonic->read (phase, position, mip) * (prevModel->harmonicLevel / m.harmonicLevel);
+                    v += (pv - v) * xfade;
+                }
+                xfade -= xfadeStep;
+            }
             phase += hz / sr;
             if (phase >= 1.0) phase -= std::floor (phase);
+            if (genes.density > 0.001f)
+            {
+                // Densidad: dos copias desafinadas (±0.6 % · densidad) que leen la misma tabla
+                const float d = genes.density;
+                v += 0.7f * d * (m.harmonic->read (phase2, position, mip) + m.harmonic->read (phase3, position, mip));
+                v /= std::sqrt (1.0f + 2.0f * 0.49f * d * d);
+                phase2 += hz * (1.0 + 0.006 * d) / sr; if (phase2 >= 1.0) phase2 -= std::floor (phase2);
+                phase3 += hz * (1.0 - 0.006 * d) / sr; if (phase3 >= 1.0) phase3 -= std::floor (phase3);
+            }
             centre += v * harmGain;
+            if (morph.ghost > 0.0f)
+            {
+                // Cosmos: capa fantasma una octava arriba, levemente desafinada a cada lado (abre el estéreo)
+                const int mip2 = Wavetable::mipFor (hz * 2.0, sr);
+                const float gl = m.harmonic->read (ghostL, position, mip2), gr = m.harmonic->read (ghostR, position, mip2);
+                ghostL += 2.0 * hz * 1.0017 / sr; ghostL -= std::floor (ghostL);
+                ghostR += 2.0 * hz * 0.9983 / sr; ghostR -= std::floor (ghostR);
+                // mezcla parcial de los dos lados: abre el estéreo sin perder el centro (compatible en mono)
+                ghostOutL = (0.7f * gl + 0.3f * gr) * harmGain * morph.ghost * 0.5f;
+                ghostOutR = (0.3f * gl + 0.7f * gr) * harmGain * morph.ghost * 0.5f;
+            }
         }
 
         // Parciales inarmónicos (osciladores seno por rotación)
@@ -320,10 +483,20 @@ public:
         // El ancho que llega puede pasar de 1 (ancho del modelo × 2 × "Resintesis Ancho"); el retardo
         // Haas se satura en su máximo (20 ms) para no leer fuera del búfer. Con ancho <= 1 no cambia nada.
         const int delay = juce::jlimit (1, hl - 2, (int) (juce::jmin (1.0f, width) * (float) (hl - 2)));
-        const float nzR = haas[(size_t) ((haasPos - delay + hl) % hl)];
+        float nzR = haas[(size_t) ((haasPos - delay + hl) % hl)];
         haasPos = (haasPos + 1) % hl;
 
-        float l = centre + pl + nz, r = centre + pr + (width > 0.01f ? nzR : nz);
+        if (genes.rough > 0.001f)
+        {
+            // Aspereza: modulación de amplitud rápida (≈ 37 Hz, levemente irregular)
+            roughPhase += (37.0 + 9.0 * std::sin (roughPhase * 0.173)) / sr;
+            const float am = 1.0f - genes.rough * 0.5f * (1.0f + (float) std::sin (juce::MathConstants<double>::twoPi * roughPhase));
+            centre *= am; pl *= am; pr *= am; nz *= am; nzR *= am;
+        }
+        if (released && m.hasLoop() && t > (double) m.times.back())
+            modelGain *= (float) juce::jmax (0.0, 1.0 - (t - (double) m.times.back()) / tailFadeS);
+        float l = (centre + pl + nz) * modelGain + trOut, r = (centre + pr + (width > 0.01f ? nzR : nz)) * modelGain + trOut;
+        if (morph.ghost > 0.0f) { l += ghostOutL * modelGain; r += ghostOutR * modelGain; }
 
         // Tono: inclina el brillo (+ más agudos, - más oscuro)
         tiltState += 0.12f * (0.5f * (l + r) - tiltState);
@@ -339,8 +512,17 @@ public:
 private:
     struct Band { double g = 0.1, k = 1.0, s1 = 0.0, s2 = 0.0; float norm = 1.0f; };
 
-    std::shared_ptr<const ResynthModel> model;
-    double sr = 44100.0, t = 0.0, phase = 0.0, hz = 220.0;
+    std::shared_ptr<const ResynthModel> model, prevModel;   // prevModel: la variante anterior durante el fundido
+    float xfade = 0.0f, xfadeStep = 0.0f;
+    double sr = 44100.0, t = 0.0, phase = 0.0, hz = 220.0, trPos = 0.0, trStep = 0.0, dir = 1.0, phase2 = 0.37, phase3 = 0.71, roughPhase = 0.0;
+    Genes genes;
+    bool released = false;
+    Morph morph;
+    juce::Random morphRng;
+    double wanderPhase = 0.0, ghostL = 0.0, ghostR = 0.0;
+    float posSm = 0.0f, ghostOutL = 0.0f, ghostOutR = 0.0f;
+    bool posSmInit = false;
+    static constexpr double tailFadeS = 0.03;
     float frame = 0.0f, position = 0.0f, harmGain = 0.0f, harmTarget = 0.0f, harmStep = 0.0f, tiltState = 0.0f;
     int rampLen = 16, numPartials = 0, haasPos = 0;
     std::array<std::pair<double, double>, ResynthModel::maxPartials> ph {}, rot {};

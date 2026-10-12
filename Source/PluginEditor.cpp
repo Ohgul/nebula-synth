@@ -5,7 +5,7 @@ using namespace NebulaColours;
 
 //==============================================================================
 NebulaContent::NebulaContent (NebulaAudioProcessor& p)
-    : proc (p), garden (p), edit (p), mod (p), fxView (p), macros (p), browser (p), sampleEditor (p), drawPanel (p), recipePanel (p), cleanerPanel (p),
+    : proc (p), garden (p), edit (p), mod (p), fxView (p), macros (p), browser (p), sampleEditor (p), drawPanel (p), recipePanel (p), cleanerPanel (p), dnaPanel (p),
       keyboard (p.keyboardState, juce::MidiKeyboardComponent::horizontalKeyboard)
 {
     const char* names[] { "Cerebro", "Editar", "Modulacion", "Efectos" };
@@ -55,6 +55,7 @@ NebulaContent::NebulaContent (NebulaAudioProcessor& p)
     addChildComponent (drawPanel);
     addChildComponent (recipePanel);
     addChildComponent (cleanerPanel);
+    addChildComponent (dnaPanel);
 
     garden.onOpenSampleEditor = [this] { sampleEditor.open(); };
     garden.framesForWave = [this] { return sampleEditor.framesChoice(); };
@@ -62,7 +63,9 @@ NebulaContent::NebulaContent (NebulaAudioProcessor& p)
     edit.onOpenDraw = [this] { drawPanel.setVisible (true); drawPanel.toFront (true); };
     garden.onOpenCleaner = [this] { cleanerPanel.open(); };
     garden.onOpenRecipe  = [this] { recipePanel.open(); };
+    garden.onOpenDna     = [this] { dnaPanel.open(); };
     edit.onOpenCleaner   = [this] { cleanerPanel.open(); };
+    edit.onOpenDna       = [this] { dnaPanel.open(); };
 
     keyboard.setAvailableRange (24, 108);
     keyboard.setColour (juce::MidiKeyboardComponent::keyDownOverlayColourId, accent.withAlpha (0.7f));
@@ -95,6 +98,7 @@ void NebulaContent::showTab (int tab)
     edit.setVisible (tab == 1);
     mod.setVisible (tab == 2);
     fxView.setVisible (tab == 3);
+    neural.intensity = tab == 0 ? 1.0f : 0.15f;
     for (int i = 0; i < 4; ++i) tabs[(size_t) i]->setToggleState (i == tab, juce::dontSendNotification);
     repaint();
 }
@@ -190,15 +194,22 @@ void NebulaContent::timerCallback()
 void NebulaContent::paint (juce::Graphics& g)
 {
     neural.paint (g, getLocalBounds().toFloat());
-    // Logo: se calienta con la locura
-    g.setGradientFill (juce::ColourGradient (Neural::hot (accent), 18.0f, 0.0f, Neural::hot (accent2, 0.1f), 170.0f, 0.0f, false));
-    g.setFont (juce::FontOptions (26.0f, juce::Font::bold));
+    // Logo: sobrio, espaciado; un punto que late con la locura es la única "neurona" del encabezado
+    juce::Font f (juce::FontOptions (20.0f));
+    f.setExtraKerningFactor (0.32f);
+    g.setFont (f);
+    g.setColour (text);
+    g.drawText ("NEBULA", juce::Rectangle<float> (30.0f, 12.0f, 140.0f, 30.0f), juce::Justification::centredLeft);
     const float c = Neural::level();
-    const float jx = c > 0.5f ? (float) (juce::Random::getSystemRandom().nextFloat() - 0.5f) * 4.0f * (c - 0.5f) : 0.0f;
-    g.drawText ("NEBULA", juce::Rectangle<float> (18.0f + jx, 10.0f, 150.0f, 34.0f), juce::Justification::centredLeft);
+    g.setColour (Neural::hot (accent).withAlpha (0.55f + 0.45f * c));
+    const float d = 6.0f + 2.0f * c;
+    g.fillEllipse (18.0f - d * 0.5f, 27.0f - d * 0.5f, d, d);
     g.setColour (textDim);
     g.setFont (juce::FontOptions (10.0f));
-    g.drawText ("v3", 140, 12, 30, 14, juce::Justification::centredLeft);
+    g.drawText ("v3", 152, 15, 30, 14, juce::Justification::centredLeft);
+    // línea fina bajo el encabezado
+    g.setColour (panelEdge.withAlpha (0.7f));
+    g.fillRect (14, 53, getWidth() - 28, 1);
 }
 
 void NebulaContent::resized()
@@ -240,6 +251,7 @@ void NebulaContent::resized()
     drawPanel.setBounds (r.reduced (120, 50));
     recipePanel.setBounds (r.reduced (150, 0).withTrimmedBottom (-60));
     cleanerPanel.setBounds (r.reduced (24, 0).withTrimmedBottom (-40));
+    dnaPanel.setBounds (r.reduced (16, 0).withTrimmedBottom (-60));
     browser.setBounds (r.reduced (200, 10));
 }
 

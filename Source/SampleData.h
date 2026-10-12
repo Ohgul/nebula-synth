@@ -45,10 +45,10 @@ private:
 namespace SampleTools
 {
     // Detección de tono (algoritmo YIN simplificado). Devuelve Hz o 0 si no hay tono claro.
-    inline float detectPitch (const float* x, int n, double sr)
+    inline float detectPitch (const float* x, int n, double sr, float minHz = 35.0f)
     {
         const int minTau = juce::jmax (2, (int) (sr / 1500.0));
-        const int maxTau = juce::jmin (n / 2 - 1, (int) (sr / 35.0));
+        const int maxTau = juce::jmin (n / 2 - 1, (int) (sr / minHz));
         if (maxTau <= minTau + 2) return 0.0f;
 
         const int w = juce::jmin (n - maxTau, (int) (sr * 0.05));

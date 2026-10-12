@@ -12,13 +12,16 @@
 #include "ResynthBuilder.h"
 #include "FxChain.h"
 #include "Exporter.h"
+#include "Dna.h"
+#include "Similarity.h"
 
 class NebulaAudioProcessor : public juce::AudioProcessor,
-                             private juce::AsyncUpdater
+                             private juce::AsyncUpdater,
+                             private juce::Timer
 {
 public:
     NebulaAudioProcessor();
-    ~NebulaAudioProcessor() override { imitator.stop(); cleaner.cancel(); cancelPendingUpdate(); }
+    ~NebulaAudioProcessor() override { stopTimer(); imitator.stop(); cleaner.cancel(); cancelPendingUpdate(); }
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
@@ -76,6 +79,23 @@ public:
 
     // ---- v3: resíntesis, A/B, locura ----
     std::shared_ptr<const ResynthModel> resynthModel() const { return voiceCtx.models.get(); }
+
+    // ---- ADN ----
+    // El modelo base (lo que sale de RECREAR o del proyecto) no se modifica; los genes estructurales generan una
+    // variante. applyDna() la reconstruye ya (un temporizador lo hace solo al mover los genes).
+    std::shared_ptr<const ResynthModel> baseResynthModel() const { return std::atomic_load (&baseModel); }
+    void applyDna();
+    // Mutación reproducible: misma semilla + mismo ADN = mismo resultado. Los genes con candado no cambian.
+    void mutateDna (float amount, juce::int64 seed);
+    juce::int64 nextDnaSeed();                       // semilla siguiente (se guarda con el proyecto)
+    bool isGeneLocked (const juce::String& id) const;
+    void setGeneLocked (const juce::String& id, bool locked);
+    void resetGene (const juce::String& id);
+    juce::String dnaToJson() const;                  // copiar
+    bool dnaFromJson (const juce::String& json);     // pegar
+    void storeDnaSlot (int slot);                    // A/B: guarda el ADN actual en la ranura 0 (A) o 1 (B)
+    bool recallDnaSlot (int slot);                   // A/B: carga la ranura
+    bool hasDnaSlot (int slot) const;
     void setAB (bool original) { voiceCtx.abOriginal = original; }
     bool isAB() const { return voiceCtx.abOriginal.load(); }
     float computeCraziness();
@@ -115,7 +135,9 @@ public:
     enum class RecipeOrigin { None, Recreated, Imitated, WaveOnly };
     RecipeOrigin recipeOrigin = RecipeOrigin::None;
     juce::String recipeText();                // receta completa del sonido actual
-    float similarityOfCurrentPatch();         // parecido del patch actual con la sección del sample
+    float similarityOfCurrentPatch();         // parecido del patch actual con la sección del sample (0..1, honesto)
+    SimilarityReport measureSimilarity();     // el mismo parecido, con el detalle por aspecto
+    SimilarityReport lastReport;              // último parecido medido (color, envolvente, tono)
 
     // Arrastrar un audio al oscilador: se vuelve la tabla "Usuario"
     bool makeWavetableFromFile (const juce::File& file, juce::String& error);
@@ -151,6 +173,10 @@ public:
 
 private:
     void handleAsyncUpdate() override;
+    void timerCallback() override;
+    void setBaseModel (std::shared_ptr<const ResynthModel> m);
+    std::shared_ptr<const ResynthModel> baseModel;
+    Dna::Structural appliedDna;
 
     static constexpr int numVoices = 16;
 
@@ -171,6 +197,9 @@ private:
     std::unique_ptr<juce::dsp::Oversampling<float>> os2, os4;
     int currentFactor = 1, maxBlock = 512;
     float dcX[2] {}, dcY[2] {};
+public:
+    std::atomic<int> nonFiniteBlocks { 0 };   // bloques silenciados por valores no finitos (para pruebas y diagnóstico)
+private:
     juce::MidiBuffer scaledMidi;
     Genome reference;
     juce::String resynthModel64;

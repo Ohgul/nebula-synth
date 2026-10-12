@@ -1,14 +1,19 @@
 // Capturas de la interfaz v2 (todas las pestañas, ventanas y la animación del Jardín).
 #include <juce_audio_utils/juce_audio_utils.h>
+#include "TestEntry.h"
 #include "../Source/PluginProcessor.h"
 #include "../Source/PluginEditor.h"
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter();
 
+namespace {   // todo lo de esta prueba es local (permite juntar todas en NebulaTests)
+
 static constexpr double sr = 48000.0;
 static constexpr int block = 512;
 
-int main (int argc, char** argv)
+} // namespace
+
+int NEBULA_TEST_ENTRY (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI gui;
     const juce::File outDir (argc > 1 ? juce::String (argv[1]) : juce::File::getCurrentWorkingDirectory().getFullPathName());
@@ -20,6 +25,7 @@ int main (int argc, char** argv)
     proc->loadPreset (1);
 
     std::unique_ptr<juce::AudioProcessorEditor> ed (proc->createEditor());
+    int uiFailures = 0;
     ed->setVisible (true);   // necesario para que los temporizadores y las capturas funcionen igual que en el DAW
 
     std::function<void (juce::Component*, std::function<void (juce::Component*)>)> walk =
@@ -128,7 +134,12 @@ int main (int argc, char** argv)
         click ("RECREAR");
         pump (1300);
         save (shot (1.0f), "ui_recreado.png");
-        click ("Como se hizo?");
+        { auto* p = proc->state.getParameter (ParamID::transform); p->setValueNotifyingHost (p->convertTo0to1 (-0.6f)); }
+        pump (400);
+        save (shot (1.0f), "ui_abismo.png");
+        { auto* p = proc->state.getParameter (ParamID::transform); p->setValueNotifyingHost (p->convertTo0to1 (0.0f)); }
+        pump (200);
+        click ("Receta");
         pump (300);
         save (shot (1.0f), "ui_receta.png");
         click ("Cerrar");
@@ -151,6 +162,16 @@ int main (int argc, char** argv)
         click ("Editar");
         pump (300);
         save (shot (1.0f), "ui_editar_resintesis.png");
+        // Editor de ADN: abrir, mutar (semilla fija) y ver el resultado
+        click ("Editar ADN");
+        pump (300);
+        save (shot (1.0f), "ui_adn.png");
+        click ("Mutar");
+        pump (400);
+        save (shot (1.0f), "ui_adn_mutado.png");
+        if (proc->resynthModel() == proc->baseResynthModel()) { std::printf ("FALLO: mutar desde la interfaz no cambio el modelo\n"); ++uiFailures; }
+        click ("Cerrar");
+        pump (100);
         click ("Cerebro");
         pump (100);
         { auto* p = proc->state.getParameter (ParamID::engine); p->setValueNotifyingHost (p->convertTo0to1 (1.0f)); }
@@ -226,6 +247,7 @@ int main (int argc, char** argv)
 
     ed.reset();
     proc.reset();
+    if (uiFailures > 0) { std::printf ("UI: %d FALLOS\n", uiFailures); return 1; }
     std::printf ("UI OK\n");
     return 0;
 }

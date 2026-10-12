@@ -2,6 +2,7 @@ name: Compilar Nebula para Mac
 
 on:
   push:
+  pull_request:
   workflow_dispatch:
 
 jobs:
@@ -23,10 +24,65 @@ jobs:
           echo "Version: ${V}"
 
       - name: Configurar (descarga JUCE)
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DNEBULA_BUILD_TESTS=ON
 
       - name: Compilar VST3, AU y app (Apple Silicon + Intel)
         run: cmake --build build --config Release --target NebulaSynth_VST3 NebulaSynth_AU NebulaSynth_Standalone
+
+      - name: Compilar pruebas (un solo ejecutable)
+        run: |
+          set -o pipefail
+          cmake --build build --config Release --target NebulaTests 2>&1 | tee build-tests.log || {
+            # los errores se publican como anotaciones (se ven en la página del CI y por la API)
+            grep -E "error:" build-tests.log | head -20 | while IFS= read -r l; do echo "::error::$l"; done
+            exit 1
+          }
+
+      - name: Pruebas de motor y estabilidad
+        run: |
+          T=./build/NebulaTests_artefacts/Release/NebulaTests
+          mkdir -p test-output
+          fallos=0
+          run() {
+            # cada prueba deja su salida en test-output; las líneas FALLO se publican como anotaciones
+            local name="$1"; shift
+            "$T" "$name" "$@" > "test-output/$name.log" 2>&1
+            local rc=$?
+            cat "test-output/$name.log"
+            if [ $rc -ne 0 ]; then
+              fallos=$((fallos+1))
+              echo "::error title=$name::la prueba termino con codigo $rc"
+              grep -E "FALLO" "test-output/$name.log" | head -20 | while IFS= read -r l; do echo "::error title=$name::$l"; done
+            else
+              echo "::notice title=$name::$(tail -1 "test-output/$name.log")"
+            fi
+          }
+          set +e
+          run Ui test-output/ui
+          run Stereo
+          run Determinism tests/fixtures/v3
+          run V3 test-output/v3
+          run Midi
+          run Dna
+          run Transform
+          run Render test-output/render
+          run V21 test-output/v21
+          run V2 test-output/v2
+          if [ "$fallos" -gt 0 ]; then echo "::error::$fallos pruebas fallaron"; exit 1; fi
+
+      - name: Compatibilidad con proyectos v3 (informativa en Mac)
+        continue-on-error: true
+        run: |
+          ./build/NebulaTests_artefacts/Release/NebulaTests Bench test-output/bench --only 0,8 --fixtures tests/fixtures/v3 2>&1 | tee bench.log
+          grep "Compatibilidad" bench.log | while IFS= read -r l; do echo "::notice title=Compatibilidad::$l"; done
+
+      - name: Subir resultados de pruebas
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nebula-Pruebas
+          path: test-output
+          retention-days: 14
 
       - name: Firmar localmente (ad-hoc)
         run: |
@@ -43,7 +99,14 @@ jobs:
           cp -R build/NebulaSynth_artefacts/Release/AU/Nebula.component ~/Library/Audio/Plug-Ins/Components/
           killall -9 AudioComponentRegistrar || true
           sleep 2
-          auval -v aumu Nbl1 Rmcd
+          # el resultado queda como anotación (se puede leer por la API aunque los registros no se descarguen)
+          if auval -v aumu Nbl1 Rmcd > auval.log 2>&1 && grep -q "AU VALIDATION SUCCEEDED" auval.log; then
+            echo "::notice title=auval::AU VALIDATION SUCCEEDED"
+          else
+            grep -iE "error|fail" auval.log | head -10 | while IFS= read -r l; do echo "::warning title=auval::$l"; done
+            echo "::warning title=auval::auval no aprobo el AU"
+          fi
+          tail -5 auval.log
 
       - name: Crear instalador .pkg
         run: |

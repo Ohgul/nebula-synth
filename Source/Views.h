@@ -19,7 +19,7 @@ public:
     void fileDragExit (const juce::StringArray&) override { dropOsc = 0; repaint(); }
     void filesDropped (const juce::StringArray& files, int x, int y) override;
 
-    std::function<void()> onOpenSampleEditor, onOpenDraw, onOpenCleaner;
+    std::function<void()> onOpenSampleEditor, onOpenDraw, onOpenCleaner, onOpenDna;
 
 private:
     void timerCallback() override;
@@ -38,6 +38,7 @@ private:
     NebKnob *rsSpeed, *rsHarm, *rsPartials, *rsNoise, *rsTone, *rsStretch, *rsWidth;
     IconToggle rsPitch;
     IconButton rsRecreate { "Recrear de nuevo", Icons::wand(), "Vuelve a analizar el sample (por ejemplo, despues de cambiar la seccion)" };
+    IconButton rsDna { "Editar ADN", Icons::dna(), "Abre el editor de ADN: genes del sonido recreado, mutaciones y A/B" };
     juce::Rectangle<int> rResynth;
 
     // Encendidos

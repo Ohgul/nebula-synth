@@ -2,6 +2,13 @@
 
 Sintetizador polifónico (VST3 / AU) para Ableton en Mac, con un modo para *cultivar* sonidos por mutación.
 
+## Novedades de la versión 3.1
+- **ADN del sonido**: 20 genes conectados al motor de resíntesis, mutación reproducible con semilla, candados, copiar/pegar y A/B.
+- **Cosmos y Abismo**: dos transformaciones opuestas de la estructura del sonido, con control de salida y protección.
+- **808 y pads largos** mucho más fieles; **% de parecido honesto** con detalle (color, envolvente, tono).
+- **Interfaz grafito** minimalista en todas las pestañas.
+- Documentación: `docs/FUNCIONES.md`, `docs/PRUEBA-ABLETON.md`, `docs/LIMITACIONES.md`.
+
 ## Novedades de la versión 3
 - **Concepto neuronal**: el Jardín ahora es un **Cerebro**.
   - Tu sonido es el cerebro del centro y las variaciones son neuronas conectadas por axones que disparan pulsos.

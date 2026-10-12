@@ -1,11 +1,16 @@
 // Prueba sin DAW: toca cada preset, guarda un WAV y una captura de la interfaz.
 #include <juce_audio_utils/juce_audio_utils.h>
+#include "TestEntry.h"
 #include "../Source/PluginProcessor.h"
 #include "../Source/Presets.h"
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter();
 
-int main (int argc, char** argv)
+namespace {   // todo lo de esta prueba es local (permite juntar todas en NebulaTests)
+
+} // namespace
+
+int NEBULA_TEST_ENTRY (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI gui;
     const juce::File outDir (argc > 1 ? juce::String (argv[1]) : juce::File::getCurrentWorkingDirectory().getFullPathName());
@@ -144,9 +149,11 @@ int main (int argc, char** argv)
                 ++silent;
                 auto& st = proc->state;
                 auto v = [&] (const char* id) { return st.getRawParameterValue (id)->load(); };
-                std::printf ("  mudo: pk %.4f tipo %.0f corte %.0f env %.2f amp A %.2f D %.2f S %.2f oct %.0f mix %.2f\n",
+                std::printf ("  mudo: pk %.4f tipo %.0f corte %.0f env %.2f amp A %.2f D %.2f S %.2f oct %.0f mix %.2f motor %.0f osc %.0f/%.0f f2 %.0f/%.0f filtroA %.2f curva %.2f onda %.0f forma %.2f tabla %.0f fm %.2f sub %.2f ruido %.2f uni %.0f\n",
                              pk, v (ParamID::filterType), v (ParamID::cutoff), v (ParamID::filterEnv),
-                             v (ParamID::ampA), v (ParamID::ampD), v (ParamID::ampS), v (ParamID::osc1Octave), v (ParamID::oscMix));
+                             v (ParamID::ampA), v (ParamID::ampD), v (ParamID::ampS), v (ParamID::osc1Octave), v (ParamID::oscMix),
+                             v (ParamID::engine), v (ParamID::osc1On), v (ParamID::osc2On), v (ParamID::f2On), v (ParamID::f2Cutoff), v (ParamID::fltA), v (ParamID::ampCurve),
+                             v (ParamID::osc1Wave), v (ParamID::osc1Shape), v (ParamID::osc1Table), v (ParamID::fmAmount), v (ParamID::subLevel), v (ParamID::noise), v (ParamID::uniVoices));
             }
             else if (pk >= 1.0f) ++loud;
             if (gen < 5 && demoPos + one.getNumSamples() <= demo.getNumSamples())

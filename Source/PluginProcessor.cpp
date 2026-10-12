@@ -14,6 +14,8 @@ NebulaAudioProcessor::NebulaAudioProcessor()
     for (int i = 0; i < numVoices; ++i)
         synth.addVoice (new SynthVoice (voiceCtx));
 
+    startTimerHz (20);   // ADN: aplica los genes estructurales cuando cambian
+
     // Cada instancia nueva tiene su propia semilla (dos Nebula iguales no suenan clonadas); se guarda en el proyecto
     voiceCtx.renderSeed = (juce::uint32) juce::Random::getSystemRandom().nextInt();
 
@@ -97,13 +99,14 @@ void NebulaAudioProcessor::autoRegion()
     for (int i = 0; i < n; ++i) peak = juce::jmax (peak, std::abs (x[i]));
     if (peak <= 0.0f) return;
 
-    // Salta el silencio del principio y del final; en audios largos se queda con 4 s
+    // Salta el silencio del principio y del final. Antes se quedaba con 4 s: los pads largos perdían todo lo
+    // que pasaba después (la resíntesis adaptativa ya analiza el sonido completo). Límite: 60 s.
     int a = 0;
     while (a < n - 1 && std::abs (x[a]) < peak * 0.02f) ++a;
     int b = n - 1;
     while (b > a && std::abs (x[b]) < peak * 0.005f) --b;
     a = juce::jmax (0, a - (int) (s->sampleRate * 0.005));
-    b = juce::jmin (n - 1, juce::jmin (b + (int) (s->sampleRate * 0.02), a + (int) (s->sampleRate * 4.0)));
+    b = juce::jmin (n - 1, juce::jmin (b + (int) (s->sampleRate * 0.02), a + (int) (s->sampleRate * 60.0)));
     setRegion ((float) a / (float) n, (float) b / (float) n);
 }
 
@@ -156,7 +159,7 @@ NebulaAudioProcessor::RecreateResult NebulaAudioProcessor::recreateFromSample()
     auto model = ResynthBuilder::build (*s, regionStart(), regionEnd(), rootOffset(), prof);
     if (model == nullptr) return RecreateResult::Failed;
 
-    voiceCtx.models.set (model);
+    setBaseModel (model);
     resynthModel64 = model->toBase64();
 
     // Mismo volumen que el original para el A/B
@@ -177,6 +180,10 @@ NebulaAudioProcessor::RecreateResult NebulaAudioProcessor::recreateFromSample()
             rp->setValueNotifyingHost (rp->getDefaultValue());
         }
     set (ParamID::engine, (float) Engine::Resynth);
+    // Un sonido recreado se toca polifónico y sin glide: si antes había un preset Mono/Legato cargado,
+    // el modo se heredaba y solo sonaba una nota a la vez.
+    set (ParamID::polyMode, (float) PolyMode::Poly);
+    set (ParamID::glide, 0.0f);
     set (ParamID::filterType, (float) FilterKind::LowPass);
     set (ParamID::filterChar, 0.0f);
     set (ParamID::cutoff, 20000.0f);
@@ -212,16 +219,75 @@ NebulaAudioProcessor::RecreateResult NebulaAudioProcessor::recreateFromSample()
 
 float NebulaAudioProcessor::similarityOfCurrentPatch()
 {
+    lastReport = measureSimilarity();
+    return lastReport.overall;
+}
+
+// Parecido honesto (ver Similarity.h): el patch actual tocado offline contra la sección del sample,
+// con las mismas métricas validadas del banco de pruebas.
+SimilarityReport NebulaAudioProcessor::measureSimilarity()
+{
     auto s = sampleSource.get();
-    if (s == nullptr) return -1.0f;
+    if (s == nullptr) return {};
+    const double sr = s->sampleRate;
+    const int n = s->length();
+    const int a0 = juce::jlimit (0, juce::jmax (0, n - 2), (int) (regionStart() * (float) n));
+    const int a1 = juce::jlimit (a0 + 2, n, (int) (regionEnd() * (float) n));
+    const float* x = s->data();
+    float peak = 0.0f;
+    for (int i = a0; i < a1; ++i) peak = juce::jmax (peak, std::abs (x[i]));
+    if (peak <= 0.0f) return {};
+    int onset = a0;
+    while (onset < a1 - 1 && std::abs (x[onset]) < peak * 0.003f) ++onset;   // -50 dB, como el análisis
+    onset = juce::jmax (a0, onset - (int) (0.005 * sr));
+    const int len = juce::jmin (a1 - onset, (int) (8.0 * sr));               // hasta 8 s (costo acotado)
+    if (len < (int) (0.05 * sr)) return {};
+    juce::AudioBuffer<float> ref (1, len);
+    ref.copyFrom (0, 0, x + onset, len);
+
     GenomeOps ops (*this, 1);
     OfflineSynth offline (getParameters(), ops.parameters(), tables);
-    offline.setModel (voiceCtx.models.get());
+    auto m = voiceCtx.models.get();
+    offline.setModel (m);
     Genome g;
     for (auto* p : ops.parameters()) g.genes.push_back (p->getValue());
-    auto m = voiceCtx.models.get();
+    offline.setGenome (g);
+
     const bool rs = m != nullptr && juce::roundToInt (state.getRawParameterValue (ParamID::engine)->load()) == Engine::Resynth;
-    return ImitationTools::similarity (offline, g, *s, regionStart(), regionEnd(), rootOffset(), rs ? m->rootNote : -1.0f);
+    const float exact = rs ? m->rootNote : (s->hasPitch ? s->rootNote + rootOffset() : 48.0f);
+    const int note = juce::jlimit (12, 115, juce::roundToInt (exact));
+    // la nota se suelta donde el original empieza a apagarse (si se conoce) o al 85 %
+    int hold = (int) (0.85 * len);
+    if (rs && m->hasLoop()) hold = juce::jlimit (1, len, (int) (m->releaseStart * sr));
+    else if (rs) hold = len;
+    juce::AudioBuffer<float> out;
+    offline.renderStereo (out, note, hold, len, sr);
+    juce::AudioBuffer<float> test (1, len);
+    test.copyFrom (0, 0, out, 0, 0, len);
+    if (out.getNumChannels() > 1) { test.addFrom (0, 0, out, 1, 0, len); test.applyGain (0.5f); }
+
+    // La tecla tocada no es exactamente la nota del sample (p. ej. E4 -43 ct): en vez de castigar al color por
+    // esa transposición, la referencia se lleva a la misma afinación (remuestreo cúbico)
+    const double ratio = std::exp2 ((note - exact) / 12.0);
+    if (std::abs (ratio - 1.0) > 1.0e-4)
+    {
+        const int newLen = juce::jmax (2, (int) (len / ratio));
+        juce::AudioBuffer<float> shifted (1, newLen);
+        const float* src = ref.getReadPointer (0);
+        auto at = [&] (int i) { return src[juce::jlimit (0, len - 1, i)]; };
+        for (int i = 0; i < newLen; ++i)
+        {
+            const double pos = i * ratio;
+            const int i0 = (int) pos; const float f = (float) (pos - i0);
+            const float y0 = at (i0 - 1), y1 = at (i0), y2 = at (i0 + 1), y3 = at (i0 + 2);
+            shifted.setSample (0, i, y1 + 0.5f * f * (y2 - y0 + f * (2.0f * y0 - 5.0f * y1 + 4.0f * y2 - y3 + f * (3.0f * (y1 - y2) + y3 - y0))));
+        }
+        ref = std::move (shifted);
+        test.setSize (1, juce::jmin (test.getNumSamples(), newLen), true);
+    }
+
+    const bool pitched = s->hasPitch && ! s->melodic;
+    return Similarity::measure (ref, test, sr, pitched, 0.0, exact < 48.0f ? 25.0 : 50.0);
 }
 
 juce::File NebulaAudioProcessor::exportMidi()
@@ -443,7 +509,8 @@ void NebulaAudioProcessor::applyImitationResult()
     if (! imitator.finished.load()) return;
     imitator.finished = false;
     garden.plantGenome (imitator.result());
-    lastSimilarity = imitator.similarity.load();
+    // el parecido que se muestra se mide igual que en RECREAR (el del optimizador es sólo su guía interna)
+    lastSimilarity = similarityOfCurrentPatch();
     markReference();
     ++imitationCount;
 }
@@ -532,6 +599,8 @@ void NebulaAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     if (useFactor != currentFactor)
     {
         currentFactor = useFactor;
+        // El oversampling retrasa la salida unas muestras: se avisa a Ableton para que lo compense
+        setLatencySamples (useFactor == 1 ? 0 : juce::roundToInt ((useFactor == 2 ? os2 : os4)->getLatencyInSamples()));
         synth.setCurrentPlaybackSampleRate (currentSampleRate * useFactor);
         for (int i = 0; i < synth.getNumVoices(); ++i)
             if (auto* v = dynamic_cast<SynthVoice*> (synth.getVoice (i))) v->prepare (currentSampleRate * useFactor);
@@ -552,7 +621,23 @@ void NebulaAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         os.processSamplesDown (block);
     }
 
+    // Protección: si algo produjo un valor no finito (NaN/inf), ese bloque sale en silencio y los efectos
+    // y el filtro de continua vuelven a cero (si no, el NaN quedaría circulando en la reverb o el delay)
+    auto finite = [&] (const juce::AudioBuffer<float>& b)
+    {
+        for (int ch = 0; ch < b.getNumChannels(); ++ch)
+        {
+            const float* d = b.getReadPointer (ch);
+            float acc = 0.0f;
+            for (int i = 0; i < n; ++i) acc += d[i] * 0.0f;   // NaN o inf * 0 = NaN
+            if (acc != 0.0f) return false;
+        }
+        return true;
+    };
+    if (! finite (buffer)) { buffer.clear(); ++nonFiniteBlocks; }
+
     fx.process (buffer, params, voiceCtx.bpm);
+    if (! finite (buffer)) { buffer.clear(); fx.reset(); ++nonFiniteBlocks; }
 
     // Quita cualquier corriente continua (DC) de la salida
     for (int ch = 0; ch < juce::jmin (2, buffer.getNumChannels()); ++ch)
@@ -688,7 +773,7 @@ bool NebulaAudioProcessor::loadUserPreset (const juce::String& name)
     if (xml->hasAttribute ("resynthModel"))
         if (auto m = ResynthModel::fromBase64 (xml->getStringAttribute ("resynthModel")))
         {
-            voiceCtx.models.set (m);
+            setBaseModel (m);
             resynthModel64 = xml->getStringAttribute ("resynthModel");
         }
     state.state.setProperty ("preset", -1, nullptr);
@@ -738,7 +823,7 @@ void NebulaAudioProcessor::setStateInformation (const void* data, int sizeInByte
 
     // Modelo de resíntesis
     if (model64.isNotEmpty())
-        if (auto m = ResynthModel::fromBase64 (model64)) { voiceCtx.models.set (m); resynthModel64 = model64; }
+        if (auto m = ResynthModel::fromBase64 (model64)) { setBaseModel (m); resynthModel64 = model64; }
 
     // Tabla de onda del usuario
     if (userTable.isNotEmpty())
@@ -797,4 +882,109 @@ juce::AudioProcessorEditor* NebulaAudioProcessor::createEditor()
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
     return new NebulaAudioProcessor();
+}
+
+//==============================================================================
+// ADN
+
+void NebulaAudioProcessor::setBaseModel (std::shared_ptr<const ResynthModel> m)
+{
+    std::atomic_store (&baseModel, std::shared_ptr<const ResynthModel> (m));
+    appliedDna = Dna::readStructural (params);
+    voiceCtx.models.set (Dna::makeVariant (m, appliedDna));
+}
+
+void NebulaAudioProcessor::applyDna()
+{
+    const auto now = Dna::readStructural (params);
+    auto base = baseResynthModel();
+    if (base == nullptr) { appliedDna = now; return; }
+    if (now != appliedDna)
+    {
+        appliedDna = now;
+        voiceCtx.models.set (Dna::makeVariant (base, now));
+    }
+}
+
+void NebulaAudioProcessor::timerCallback()
+{
+    applyDna();
+}
+
+juce::int64 NebulaAudioProcessor::nextDnaSeed()
+{
+    const juce::int64 s = (juce::int64) state.state.getProperty ("dnaSeed", 1);
+    state.state.setProperty ("dnaSeed", s + 1, nullptr);
+    return s;
+}
+
+bool NebulaAudioProcessor::isGeneLocked (const juce::String& id) const
+{
+    return juce::StringArray::fromTokens (state.state["dnaLocks"].toString(), ",", "").contains (id);
+}
+
+void NebulaAudioProcessor::setGeneLocked (const juce::String& id, bool locked)
+{
+    auto list = juce::StringArray::fromTokens (state.state["dnaLocks"].toString(), ",", "");
+    list.removeString (id);
+    if (locked) list.add (id);
+    list.removeEmptyStrings();
+    state.state.setProperty ("dnaLocks", list.joinIntoString (","), nullptr);
+}
+
+void NebulaAudioProcessor::resetGene (const juce::String& id)
+{
+    if (auto* p = state.getParameter (id)) p->setValueNotifyingHost (p->getDefaultValue());
+    applyDna();
+}
+
+void NebulaAudioProcessor::mutateDna (float amount, juce::int64 seed)
+{
+    juce::Random r (seed);
+    amount = juce::jlimit (0.0f, 1.0f, amount);
+    for (auto& g : Dna::genes())
+    {
+        auto* p = state.getParameter (g.id);
+        if (p == nullptr) continue;
+        const float v = p->getValue();
+        const float u = r.nextFloat() * 2.0f - 1.0f;   // se consume siempre: los candados no cambian el resto
+        if (isGeneLocked (g.id) || juce::String (g.id) == ParamID::dnaHold) continue;
+        p->setValueNotifyingHost (juce::jlimit (0.0f, 1.0f, v + u * amount * 0.5f));
+    }
+    applyDna();
+}
+
+juce::String NebulaAudioProcessor::dnaToJson() const
+{
+    auto o = new juce::DynamicObject();
+    o->setProperty ("nebulaDna", 1);
+    for (auto& g : Dna::genes())
+        if (auto* p = state.getParameter (g.id)) o->setProperty (g.id, p->convertFrom0to1 (p->getValue()));
+    return juce::JSON::toString (juce::var (o));
+}
+
+bool NebulaAudioProcessor::dnaFromJson (const juce::String& json)
+{
+    const auto v = juce::JSON::parse (json);
+    if (! v.isObject() || ! v.hasProperty ("nebulaDna")) return false;
+    for (auto& g : Dna::genes())
+        if (v.hasProperty (g.id))
+            if (auto* p = state.getParameter (g.id)) p->setValueNotifyingHost (p->convertTo0to1 ((float) (double) v[g.id]));
+    applyDna();
+    return true;
+}
+
+void NebulaAudioProcessor::storeDnaSlot (int slot)
+{
+    state.state.setProperty (slot == 0 ? "dnaSlotA" : "dnaSlotB", dnaToJson(), nullptr);
+}
+
+bool NebulaAudioProcessor::recallDnaSlot (int slot)
+{
+    return dnaFromJson (state.state[slot == 0 ? "dnaSlotA" : "dnaSlotB"].toString());
+}
+
+bool NebulaAudioProcessor::hasDnaSlot (int slot) const
+{
+    return state.state[slot == 0 ? "dnaSlotA" : "dnaSlotB"].toString().isNotEmpty();
 }
