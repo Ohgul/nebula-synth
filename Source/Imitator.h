@@ -67,7 +67,9 @@ public:
             const int n = juce::jmin (block, totalSamples - pos);
             juce::MidiBuffer midi;
             if (pos == 0) midi.addEvent (juce::MidiMessage::noteOn (1, note, (juce::uint8) 100), 0);
-            if (holdSamples >= pos && holdSamples < pos + n) midi.addEvent (juce::MidiMessage::noteOff (1, note), holdSamples - pos);
+            // renderNextBlock (out, midi, pos, n): las posiciones del MIDI son absolutas dentro de "out"
+            // (antes iba "holdSamples - pos" y la nota nunca se soltaba en el % de parecido)
+            if (holdSamples >= pos && holdSamples < pos + n) midi.addEvent (juce::MidiMessage::noteOff (1, note), holdSamples);
             ctx.blockTime = pos / sr;
             synth.renderNextBlock (out, midi, pos, n);
         }

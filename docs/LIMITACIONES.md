@@ -17,7 +17,7 @@ Esta lista es explícita a propósito. Lo que aparece aquí **no** está resuelt
 
 - **Campanas y sonidos inarmónicos** dan alrededor de 50 % de parecido, y el color queda lejos (6 dB en la prueba). La nota raíz de una campana se detecta con error: una campana de 330 Hz se toma como E4 -43 ct.
 - **808:** el sostenido y el tono están bien, pero los agudos del 808 recreado quedan unos 9 dB por debajo del original. Un bombo 808 sintético da 56 %.
-- **Envolvente de los pads:** queda un error de 3 a 5 dB. La forma exacta de la cola y el fundido final no siempre coinciden (por ejemplo, en cuerda frotada y pads con final lineal).
+- **Envolvente de los pads:** en el banco queda un error de 3 a 5 dB en pads largos (la forma exacta de la cola y el fundido final no siempre coinciden). En el % de parecido de la 3.1.0 se veía peor por un error de medición (la nota nunca se soltaba), corregido en la rama `forge/v4-dev`.
 - **El estéreo de la resíntesis** se aproxima con un ancho y un retardo. No reconstruye la imagen estéreo exacta del original.
 - **El % de parecido mide hasta 8 s** del sample.
   - Su ponderación de sonoridad usa los coeficientes oficiales a 48 kHz; con samples a 44.1 kHz hay una pequeña desviación.
