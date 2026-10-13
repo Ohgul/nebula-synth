@@ -199,10 +199,42 @@ int NEBULA_TEST_ENTRY (int argc, char** argv)
                         std::printf ("   difiere %s: ahora %.4f base %.4f\n", info.id.toRawUTF8(), now.get (info.id), base.get (info.id));
                 ++uiFailures;
             }
-            click ("DESCUBRIR");
+            click ("RECREAR");
             pump (300);
-            save (shot (1.0f), "ui_descubrir.png");
+            save (shot (1.0f), "ui_recrear.png");
+            // DESCUBRIR: el cerebro crece desde la referencia, se elige, se evoluciona y se abre en el editor
+            click ("DESCUBRIR");
+            pump (200);
+            click ("Sembrar");
+            pump (1500);
+            save (shot (1.0f), "ui_cerebro_creciendo.png");
+            for (int k = 0; k < 1200 && proc->brain.isWorking(); ++k) pump (100);
+            pump (400);
+            auto net = proc->brain.snapshot();
+            if (net.size() < 6) { std::printf ("FALLO: el cerebro no crecio desde la interfaz (%d neuronas)\n", (int) net.size()); ++uiFailures; }
+            if (auto* bv = first ((BrainView*) nullptr); bv != nullptr && net.size() >= 2)
+            {
+                std::sort (net.begin(), net.end(), [] (auto& a, auto& b) { return a.similarity > b.similarity; });
+                bv->focusNeuron (net[0].id);
+                pump (200);
+                if (! bv->infoText().contains ("COMO ESTA HECHO")) { std::printf ("FALLO: la neurona no muestra como esta hecha\n"); ++uiFailures; }
+                bv->togglePick (net[0].id); bv->togglePick (net[1].id);
+                click ("Me gusta");
+                click ("Evolucionar");
+                pump (300);
+                for (int k = 0; k < 1200 && proc->brain.isWorking(); ++k) pump (100);
+                pump (400);
+                save (shot (1.0f), "ui_cerebro_evolucion.png");
+                int g1 = 0; for (auto& n : proc->brain.snapshot()) if (n.generation == 1) ++g1;
+                if (g1 < 6) { std::printf ("FALLO: Evolucionar desde la interfaz dio %d hijos\n", g1); ++uiFailures; }
+                click ("Editar");
+                pump (300);
+                save (shot (1.0f), "ui_cerebro_al_editor.png");
+                if (find ("Editar") == nullptr || juce::roundToInt (proc->state.getRawParameterValue (ParamID::engine)->load()) != Engine::Synth)
+                { std::printf ("FALLO: Editar no abrio el editor con el patch\n"); ++uiFailures; }
+            }
             click ("CREAR");
+            click ("Cerebro");
             pump (200);
         }
         click ("RECREAR");

@@ -137,7 +137,7 @@ public:
     void paint (juce::Graphics& g) override
     {
         using namespace NebulaColours;
-        drawOverlayFrame (g, getLocalBounds(), Icons::sparkle(), "DESCUBRIR  FORGE: SINTESIS INVERSA",
+        drawOverlayFrame (g, getLocalBounds(), Icons::sparkle(), "RECREAR  FORGE: SINTESIS INVERSA",
                           "Recetas del motor Synth para tu sample. Suenan sin el sample. El % es fidelidad de recreacion, no calidad musical.");
         g.setColour (textDim);
         g.setFont (juce::FontOptions (10.5f));
