@@ -20,7 +20,7 @@
 namespace Forge
 {
     // Sube cuando cambia algo del motor que altera el sonido de un patch (la base queda desactualizada)
-    static constexpr int engineDspVersion = 1;
+    static constexpr int engineDspVersion = 2;   // 2: operador FM 3 (0.3.1)
     static constexpr int datasetFormatVersion = 1;
 
     struct CategorySpec { Category cat; int note; double holdS, totalS; bool pitched; };
@@ -42,6 +42,7 @@ namespace Forge
         auto u = [&] (float lo, float hi) { return lo + (hi - lo) * r.nextFloat(); };
         auto lg = [&] (float lo, float hi) { return lo * std::pow (hi / lo, r.nextFloat()); };   // logarítmico
         auto pick = [&] (std::initializer_list<int> v) { const int i = r.nextInt ((int) v.size()); return *(v.begin() + i); };
+        auto pickF = [&] (std::initializer_list<float> v) { const int i = r.nextInt ((int) v.size()); return *(v.begin() + i); };
         auto chance = [&] (float pr) { return r.nextFloat() < pr; };
         auto ampADSR = [&] (float a0, float a1, float d0, float d1, float s0, float s1, float r0, float r1)
         { p.set (ParamID::ampA, lg (a0, a1)); p.set (ParamID::ampD, lg (d0, d1)); p.set (ParamID::ampS, u (s0, s1)); p.set (ParamID::ampR, lg (r0, r1)); };
@@ -114,6 +115,16 @@ namespace Forge
                 p.set (ParamID::fltA, 0.001f); p.set (ParamID::fltD, lg (0.1f, 1.5f)); p.set (ParamID::fltS, 0.0f); p.set (ParamID::filterEnv, 0.0f);
                 ampADSR (0.001f, 0.005f, 0.5f, 3.0f, 0.0f, 0.1f, 0.2f, 2.0f);
                 p.set (ParamID::ampCurve, u (0.2f, 0.8f));
+                // 0.3.1: operador 3 (FM de tres operadores, relaciones inarmónicas típicas de campanas y metales)
+                if (chance (0.6f))
+                {
+                    p.set (ParamID::op3On, 1);
+                    p.set (ParamID::op3Ratio, pickF ({ 0.5f, 1.41f, 2.76f, 3.5f, 4.2f, 5.4f, 7.0f }));
+                    p.set (ParamID::op3Amount, u (0.05f, 0.45f));
+                    p.set (ParamID::op3Target, (float) pick ({ 0, 1 }));
+                    p.set (ParamID::env3A, 0.001f); p.set (ParamID::env3D, lg (0.1f, 2.0f)); p.set (ParamID::env3S, 0.0f);
+                    p.set (ParamID::op3Env, u (0.0f, 0.6f));
+                }
                 break;
             case Category::Noise:
             default:

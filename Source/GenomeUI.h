@@ -115,7 +115,7 @@ private:
             }
         };
         // FM y unísono no son una etapa del camino: se marcan sobre el oscilador 1
-        column (0, { "osc1", "osc2", "sub", "noise" });
+        column (0, { "op3", "osc1", "osc2", "sub", "noise" });
         column (1, { "f1", "f2" });
         column (2, { "drive" });
         column (3, { "amp" });
@@ -186,7 +186,7 @@ public:
 
     static juce::String shortName (Forge::Module m)
     {
-        static const char* n[] { "Osc 1", "Osc 2", "FM", "Sub", "Ruido", "Unis.", "Filtro 1", "Filtro 2", "Drive", "Amp", "Env 2", "Env 3", "LFO 1", "LFO 2", "Voz" };
+        static const char* n[] { "Osc 1", "Osc 2", "FM", "Sub", "Ruido", "Unis.", "Filtro 1", "Filtro 2", "Drive", "Amp", "Env 2", "Env 3", "LFO 1", "LFO 2", "Voz", "Op 3" };
         return n[(int) m];
     }
 

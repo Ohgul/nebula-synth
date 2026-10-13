@@ -17,7 +17,7 @@
 // ===========================================================================
 namespace Forge
 {
-    enum class Module { Osc1, Osc2, Fm, Sub, Noise, Unison, Filter1, Filter2, Drive, Amp, Env2, Env3, Lfo1, Lfo2, Voice, count };
+    enum class Module { Osc1, Osc2, Fm, Sub, Noise, Unison, Filter1, Filter2, Drive, Amp, Env2, Env3, Lfo1, Lfo2, Voice, Op3, count };
     static constexpr int moduleCount = (int) Module::count;
 
     struct ModuleInfo { Module m; const char* key; const char* name; bool optional; std::vector<const char*> params; };
@@ -41,6 +41,7 @@ namespace Forge
             { Module::Lfo1,    "lfo1",  "LFO 1",        false, { lfoOn, lfoRate, lfoFilter, lfoPitch, lfoShape, lfoSync, lfoRetrig, lfoFade } },
             { Module::Lfo2,    "lfo2",  "LFO 2",        false, { lfo2On, lfo2Rate, lfo2Shape, lfo2Sync, lfo2Retrig, lfo2Fade } },
             { Module::Voice,   "voice", "Voz",          false, { polyMode, voiceCount, glide, bendRange, velSens, modTime, modAmount } },
+            { Module::Op3,     "op3",   "FM Op 3",      true,  { op3On, op3Ratio, op3Amount, op3Env, op3Target } },
         };
         return t;
     }
@@ -107,6 +108,7 @@ namespace Forge
             case Module::Lfo1:    return p.geti (lfoOn) != 0 && (p.get (lfoPitch) > 0.5f || std::abs (p.get (lfoFilter)) > 0.01f || modulates (p, ModSrc::Lfo1));
             case Module::Lfo2:    return p.geti (lfo2On) != 0 && modulates (p, ModSrc::Lfo2);
             case Module::Voice:   return true;
+            case Module::Op3:     return p.geti (op3On) != 0 && (p.get (op3Amount) > 0.0005f || std::abs (p.get (op3Env)) > 0.0005f);
             case Module::count:   break;
         }
         return false;
@@ -156,6 +158,7 @@ namespace Forge
             }
             if (on (Module::Fm)) g.edges.push_back ({ "osc2", "osc1", true, p.get (fmAmount), fmAmount });   // FM: el osc 2 modula la fase del osc 1
             if (on (Module::Unison)) g.edges.push_back ({ "uni", "osc1", true, p.get (uniDetune), uniDetune });
+            if (on (Module::Op3)) g.edges.push_back ({ "op3", p.geti (op3Target) == 0 ? "osc1" : "osc2", true, p.get (op3Amount), op3Amount });
             const juce::String afterFilters = on (Module::Drive) ? "drive" : "amp";
             if (on (Module::Filter1)) g.edges.push_back ({ "f1", on (Module::Filter2) && ! parallel ? "f2" : afterFilters, false, 1.0f, {} });
             if (on (Module::Filter2)) g.edges.push_back ({ "f2", afterFilters, false, 1.0f, {} });
@@ -263,6 +266,10 @@ namespace Forge
                     case Module::Unison:  p.set (uniOn, enable ? 1.0f : 0.0f); if (enable) { p.set (uniVoices, 3.0f); p.set (uniDetune, 0.1f + 0.2f * rng.nextFloat()); } break;
                     case Module::Filter2: p.set (f2On, enable ? 1.0f : 0.0f); if (enable) p.set (f2Cutoff, 2000.0f + 6000.0f * rng.nextFloat()); break;
                     case Module::Drive:   p.set (driveOn, enable ? 1.0f : 0.0f); if (enable) p.set (drive, 0.1f + 0.3f * rng.nextFloat()); break;
+                    case Module::Op3:     p.set (op3On, enable ? 1.0f : 0.0f);
+                                          if (enable) { static const float ratios[] { 0.5f, 1.0f, 1.41f, 2.0f, 2.76f, 3.0f, 3.5f, 5.4f, 7.0f };
+                                                        p.set (op3Ratio, ratios[rng.nextInt (9)]); p.set (op3Amount, 0.05f + 0.3f * rng.nextFloat()); p.set (op3Target, (float) rng.nextInt (2)); }
+                                          break;
                     default: break;
                 }
             }

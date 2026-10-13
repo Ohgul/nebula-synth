@@ -48,6 +48,19 @@ namespace Forge
                              harmonic ? "el osc 2 modula la fase del osc 1 en una relacion entera: armonicos nuevos, sigue afinado"
                                       : "relacion no entera: parciales inarmonicos, como campanas o metal" });
         }
+        if (moduleActive (p, Module::Op3))
+        {
+            const float ratio = p.get (op3Ratio);
+            const bool harmonic = std::abs (ratio - std::round (ratio)) < 0.02f || std::abs (2.0f * ratio - std::round (2.0f * ratio)) < 0.02f;
+            const int target = p.geti (op3Target);
+            juce::String what = juce::String::formatted ("FM operador 3: relacion %.2f, indice ", ratio) + pct (p.get (op3Amount)) + (target == 0 ? " -> osc 1" : " -> osc 2");
+            if (std::abs (p.get (op3Env)) > 0.01f) what << juce::String::formatted (", Env 3 %+.0f %%", p.get (op3Env) * 100.0f);
+            juce::String why = harmonic ? "un seno extra modula la fase: mas armonicos, sigue afinado" : "relacion no entera: parciales inarmonicos (campana, metal, vidrio)";
+            if (target == 1) why << (moduleActive (p, Module::Osc2) || moduleActive (p, Module::Fm) ? "; modula al osc 2, que a su vez suena o modula al osc 1 (cadena 3 -> 2 -> 1)"
+                                                                                                    : "; modula al osc 2, pero el osc 2 no suena ni hace FM: este operador no se oye");
+            if (std::abs (p.get (op3Env)) > 0.01f) why << "; la envolvente 3 cambia el brillo FM con el tiempo";
+            out.push_back ({ Module::Op3, what, why });
+        }
         if (moduleActive (p, Module::Sub))
             out.push_back ({ Module::Sub, "Sub: " + pct (p.get (subLevel)), "una octava abajo del osc 1: peso en graves sin cambiar el brillo" });
         if (moduleActive (p, Module::Noise))
