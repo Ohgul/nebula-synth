@@ -514,6 +514,15 @@ namespace Forge
 
         SearchDiagnostics diagnostics;
 
+        // Resultados progresivos (NEBULA-CORE-050): se llama desde el hilo de la búsqueda cada vez que una
+        // semilla empieza a optimizarse (provisional = true, fidelidad sin medir) y cuando termina (medida
+        // completa). El mismo id identifica al candidato en los dos avisos. Nada se inventa: cada aviso es
+        // un patch real del motor en ese momento de la búsqueda.
+        std::function<void (const PatchCandidate&, bool provisional)> onCandidate;
+        // Objetivo de la búsqueda (opcional): recibe el patch y su pérdida rápida contra la referencia y
+        // devuelve lo que se minimiza. Sin él, se minimiza la pérdida (recrear lo más fiel posible).
+        std::function<double (const SynthPatch&, double referenceLoss)> objective;
+
         std::vector<PatchCandidate> run (const SearchSettings& st)
         {
             const auto t0 = juce::Time::getMillisecondCounterHiRes();
@@ -577,6 +586,14 @@ namespace Forge
             for (int i = 0; i < toOptimize && ! cancel.load(); ++i)
             {
                 auto& sd = seeds[(size_t) i];
+                const auto id = sd.source == "indice" ? sd.id + "." + juce::String (dCount + 1) : sd.id + "-1";
+                if (onCandidate)
+                {
+                    auto pre = finish (sd.patch, sd.loss, id, 0, {});
+                    pre.source = sd.source; pre.initialPatch = sd.patch; pre.initialLoss = sd.loss;
+                    pre.fidelity.overall = -1.0f;
+                    onCandidate (pre, true);
+                }
                 juce::Random rng (st.seed * 7919 + i);
                 std::pair<SynthPatch, double> best { sd.patch, sd.loss };
                 if (st.optimizer == SearchSettings::Optimizer::CmaThenLocal)
@@ -588,10 +605,17 @@ namespace Forge
                 }
                 else
                     best = refine (sd.patch, sd.genes, rng, st.evaluationsPerArchitecture, t0, st.timeLimitS);
-                const auto id = sd.source == "indice" ? sd.id + "." + juce::String (++dCount) : sd.id + "-1";
+                if (sd.source == "indice") ++dCount;
                 auto c = finish (best.first, best.second, id, 0, {});
                 c.initialPatch = sd.patch; c.initialLoss = sd.loss; c.source = sd.source;
                 pool.push_back (c);
+                if (onCandidate && ! cancel.load())
+                {
+                    auto shown = c;
+                    measureFully (shown);
+                    shown.fidelity.loss = best.second;   // lo que minimizó la búsqueda
+                    onCandidate (shown, false);
+                }
                 diagnostics.seeds.push_back ({ id, sd.source, sd.loss, best.second });
                 diagnostics.bestFinalLoss = juce::jmin (diagnostics.bestFinalLoss, best.second);
                 progress = 0.9f * (float) (i + 1) / (float) toOptimize;
@@ -674,7 +698,8 @@ namespace Forge
         {
             ++evaluations;
             int cx = 0; describe (q, &cx);
-            return eval.fastLoss (eval.render (renderer, q, nullptr, true)) + (settings != nullptr ? settings->complexityPenalty : 0.01) * cx;
+            const double l = eval.fastLoss (eval.render (renderer, q, nullptr, true)) + (settings != nullptr ? settings->complexityPenalty : 0.01) * cx;
+            return objective ? objective (q, l) : l;
         }
 
         // CMA-ES separable sobre los genes (espacio normalizado, caja = rango de cada gen)

@@ -16,6 +16,7 @@ class NebulaContent : public juce::Component, private juce::Timer
     // (la locura se calcula aquí 20 veces por segundo y anima toda la interfaz)
 public:
     static constexpr int designW = 1180, designH = 780;
+    static juce::String versionLabel() { return juce::String ("NEBULA SYNTH v") + NEBULA_VERSION_STRING; }
 
     explicit NebulaContent (NebulaAudioProcessor&);
     void paint (juce::Graphics&) override;

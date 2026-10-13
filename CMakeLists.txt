@@ -4,7 +4,9 @@ cmake_minimum_required(VERSION 3.22)
 set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "")
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "")
 
-project(NebulaSynth VERSION 0.4.0)
+# Versión oficial de desarrollo (NEBULA-CORE-050). Fuente única: de aquí salen el AU, el instalador y el texto
+# "NEBULA SYNTH v0.3.1" de la interfaz. No se sube sin autorización del usuario.
+project(NebulaSynth VERSION 0.3.1)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -84,7 +86,7 @@ option(NEBULA_BUILD_TESTS "Compilar las pruebas sin DAW" OFF)
 if(NEBULA_BUILD_TESTS)
     set(NEBULA_TEST_NAMES "")
     set(NEBULA_TEST_FILES "")
-    foreach(t Render Imitate V2 V21 V3 Ui Bench Stereo Determinism Midi Dna Transform Forge ForgeDb Genome Realtime)
+    foreach(t Render Imitate V2 V21 V3 Ui Bench Stereo Determinism Midi Dna Transform Forge ForgeDb Genome Realtime Brain)
         if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/${t}Test.cpp")
             message(STATUS "Prueba no encontrada (se omite): ${t}Test.cpp")
             continue()

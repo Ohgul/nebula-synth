@@ -1038,6 +1038,33 @@ bool NebulaAudioProcessor::forgeMutate (int index, juce::int64 seed)
     return true;
 }
 
+bool NebulaAudioProcessor::brainStart (juce::int64 seed, float distance)
+{
+    bool ok = false;
+    auto section = forgeSection (ok);
+    if (! ok) return false;
+    return brain.startFromReference (section, sampleSource.get()->sampleRate, sampleSource.get()->name, seed, distance);
+}
+
+bool NebulaAudioProcessor::brainEvolve (const juce::StringArray& parentIds, int children)
+{
+    brain.setLocks (forgeLocks());
+    return brain.evolve (parentIds, children);
+}
+
+void NebulaAudioProcessor::auditionSynthPatch (const Forge::SynthPatch& patch, const juce::String& label)
+{
+    const auto ref = brain.reference().lengthS > 0 ? brain.reference() : forgeReference();
+    Forge::PatchRenderer r;
+    const double sr = currentSampleRate > 0 ? currentSampleRate : 48000.0;
+    const double len = juce::jlimit (0.5, 6.0, ref.lengthS > 0 ? ref.lengthS : 2.0);
+    const int note = ref.lengthS > 0 ? ref.note : 60;
+    auto audio = r.render (patch, note, ref.releaseStartS > 0 ? ref.releaseStartS : len, len + 0.3, sr);
+    juce::AudioBuffer<float> mono (1, audio.getNumSamples());
+    mono.copyFrom (0, 0, audio, 0, 0, audio.getNumSamples());
+    startPreview (SampleTools::fromBuffer (mono, sr, label));
+}
+
 bool NebulaAudioProcessor::forgeCrossover (int a, int b, juce::int64 seed)
 {
     bool ok = false;

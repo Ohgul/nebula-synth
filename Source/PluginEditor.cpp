@@ -253,7 +253,7 @@ void NebulaContent::paint (juce::Graphics& g)
     g.fillEllipse (18.0f - d * 0.5f, 27.0f - d * 0.5f, d, d);
     g.setColour (textDim);
     g.setFont (juce::FontOptions (10.0f));
-    g.drawText ("v" + juce::String (NEBULA_VERSION_STRING), 152, 15, 50, 14, juce::Justification::centredLeft);
+
     // línea fina bajo el encabezado
     g.setColour (panelEdge.withAlpha (0.7f));
     g.fillRect (14, 53, getWidth() - 28, 1);
@@ -264,7 +264,12 @@ void NebulaContent::paint (juce::Graphics& g)
     g.fillRect (footerArea.getX(), footerArea.getY(), footerArea.getWidth(), 1);
     g.setColour (textDim);
     g.setFont (juce::FontOptions (10.5f));
-    g.drawText (footerText, footerArea.reduced (14, 0), juce::Justification::centredLeft);
+    {
+        // versión siempre visible (discreta)
+        auto fa = footerArea.reduced (14, 0);
+        g.drawText (versionLabel(), fa.removeFromRight (150), juce::Justification::centredRight);
+        g.drawText (footerText, fa, juce::Justification::centredLeft);
+    }
 }
 
 void NebulaContent::resized()
