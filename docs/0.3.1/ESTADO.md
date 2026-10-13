@@ -74,6 +74,47 @@ Rama `feature/nebula-0.3.1-evolution`, creada sobre `feature/forge-2-fm-architec
   - el 60 % de las campanas de la base nueva lo usan.
 - **Base de patches regenerada** (`dsp2-…`, 2002 patches).
 
+## Medido
+
+### FORGE (prueba `Forge`)
+
+- 808: 73 % y lead: 79 %. Con la versión de la rama 0.4.0 eran 78 % y 82 %.
+- La bajada coincide con dos cambios de este punto de partida:
+  - el castigo a las colas cortadas, que trajo el PR #6;
+  - la base de patches nueva.
+- Los umbrales de la prueba (60 %) siguen pasando. Hay que investigarlo.
+
+### Recuperación interna (`Forge recuperacion 3 2`)
+
+Son 21 patches ocultos de la base nueva, 3 por categoría, buscados con 2 semillas.
+
+- Fidelidad media **71.9 %**.
+- Variación entre semillas: 1.7 puntos.
+- Distancia de parámetros 0.137, frente a 0.177 al azar.
+- 18.6 s por búsqueda.
+
+Por categoría (mejor semilla):
+
+| Categoría | Fidelidad de los 3 patches |
+|---|---|
+| BASS | 83 / 74 / 82 % |
+| 808 | 88 / 90 / 81 % |
+| LEAD | 63 / 74 / 79 % |
+| PLUCK | 86 / 69 / 78 % |
+| PAD | 57 / 77 / 75 % |
+| FM_BELL | 38 / 52 / 77 % |
+| NOISE_TEXTURE | 61 / 56 / 70 % |
+
+- No se compara directo con el 70.7 % anterior: la base y su partición de prueba cambiaron.
+- **La meta de 0.85 no se alcanzó.**
+
+### Cerebro (prueba `Brain`)
+
+- La generación 0 crece en 11 pasos visibles en ~25 s.
+- La similitud mostrada coincide con una medida independiente.
+- Con distancia "lejos", el parecido baja de 62 % a 12 % y el cambio de parámetros sube de 0.007 a 0.023.
+- Con "me gusta", la distancia de la generación a la neurona elegida baja de 2.83 a 1.79.
+
 ## Pendiente o no verificado
 
 Ver `docs/LIMITACIONES.md`.
