@@ -9,6 +9,7 @@
 #include "NeuralUI.h"
 #include "DnaPanel.h"
 #include "ForgePanel.h"
+#include "BrainView.h"
 
 // Contenido de la ventana (tamaño de diseño fijo; se escala con el zoom)
 class NebulaContent : public juce::Component, private juce::Timer
@@ -16,6 +17,7 @@ class NebulaContent : public juce::Component, private juce::Timer
     // (la locura se calcula aquí 20 veces por segundo y anima toda la interfaz)
 public:
     static constexpr int designW = 1180, designH = 780;
+    static juce::String versionLabel() { return juce::String ("NEBULA SYNTH v") + NEBULA_VERSION_STRING; }
 
     explicit NebulaContent (NebulaAudioProcessor&);
     void paint (juce::Graphics&) override;
@@ -23,7 +25,7 @@ public:
 
     std::function<void (float)> onZoom;
     void showTab (int tab);
-    void showWorkspace (int w);          // 0 DESCUBRIR, 1 CREAR, 2 TRANSFORMAR
+    void showWorkspace (int w);          // 0 RECREAR, 1 CREAR, 2 TRANSFORMAR, 3 DESCUBRIR
     void setZoomChoice (float z);
     void mouseDown (const juce::MouseEvent&) override;   // cada clic abre un paso nuevo de "deshacer"
 
@@ -35,7 +37,7 @@ private:
 
     NebulaAudioProcessor& proc;
     std::array<std::unique_ptr<IconButton>, 4> tabs;
-    std::array<std::unique_ptr<IconButton>, 3> workspaces;
+    std::array<std::unique_ptr<IconButton>, 4> workspaces;
     juce::ComboBox presetBox, zoomBox;
     IconButton prevButton { "", Icons::chevronLeft(), "Sonido anterior" }, nextButton { "", Icons::chevronRight(), "Sonido siguiente" },
                saveButton { "", Icons::save(), "Guardar tu sonido como preset" },
@@ -61,6 +63,7 @@ private:
     DnaPanel dnaPanel;
     ForgePanel forgePanel;
     TransformView transformView;
+    BrainView brainView;
     juce::String footerText;
     juce::Rectangle<int> footerArea;
     juce::MidiKeyboardComponent keyboard;

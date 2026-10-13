@@ -16,6 +16,7 @@
 #include "Similarity.h"
 #include "Forge/ForgeJob.h"
 #include "Forge/Polarity.h"
+#include "Forge/Brain.h"
 
 class NebulaAudioProcessor : public juce::AudioProcessor,
                              private juce::AsyncUpdater,
@@ -23,7 +24,7 @@ class NebulaAudioProcessor : public juce::AudioProcessor,
 {
 public:
     NebulaAudioProcessor();
-    ~NebulaAudioProcessor() override { stopTimer(); forgeJob.stop(); imitator.stop(); cleaner.cancel(); cancelPendingUpdate(); }
+    ~NebulaAudioProcessor() override { stopTimer(); brain.stop(); forgeJob.stop(); imitator.stop(); cleaner.cancel(); cancelPendingUpdate(); }
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
@@ -180,6 +181,12 @@ public:
     Forge::SynthPatch currentSynthPatch() const;                // la receta que suena ahora
     std::atomic<int> forgeRuns { 0 };
     juce::String forgeDiagnosticsText() const { const juce::ScopedLock sl (forgeLock); return forgeDiagnostics; }
+
+    // ---- DESCUBRIR: cerebro vivo (NEBULA-CORE-050) ----
+    Forge::Brain brain;
+    bool brainStart (juce::int64 seed, float distance);          // generación 0 desde la sección del sample
+    bool brainEvolve (const juce::StringArray& parentIds, int children = 8);
+    void auditionSynthPatch (const Forge::SynthPatch& p, const juce::String& label);   // escuchar sin cambiar el sonido
 
     // ---- ADN estructural (P4): candados por módulo, cruce de dos candidatos ----
     Forge::ModuleLocks forgeLocks() const;                       // se guardan con el proyecto

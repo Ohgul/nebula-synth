@@ -8,6 +8,7 @@
 #include "TestEntry.h"
 #include "../Source/PluginProcessor.h"
 #include "../Source/Forge/Polarity.h"
+#include "../Source/Forge/Explain.h"
 #include "bench/Corpus.h"
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter();
@@ -234,6 +235,64 @@ int NEBULA_TEST_ENTRY (int, char**)
         const auto back = Forge::PolarityEdit::fromValueTree (e.toValueTree());
         check (base.name + ": edicion reversible (guardar/cargar y volver)", back.amount == e.amount && back.result().sameSound (e.result())
                && back.base.sameSound (base) && e.revert().sameSound (base));
+    }
+
+    // ================= 0.3.1: operador FM 3 =================
+    {
+        // energía fuera de los armónicos de la fundamental (inarmonía), en dB relativos al total
+        auto inharmonicDb = [] (const juce::AudioBuffer<float>& b, double f0, double t0, double t1)
+        {
+            const auto m = Bench::toMono (b);
+            constexpr int order = 14, N = 1 << order;
+            juce::dsp::FFT fft (order);
+            std::vector<float> buf ((size_t) N * 2, 0.0f);
+            const int a = (int) (t0 * sr);
+            for (int i = 0; i < N && a + i < (int) m.size() && a + i < (int) (t1 * sr); ++i)
+                buf[(size_t) i] = (float) (m[(size_t) (a + i)] * (0.5 - 0.5 * std::cos (2 * Bench::kPi * i / N)));
+            fft.performFrequencyOnlyForwardTransform (buf.data());
+            double off = 0, all = 0;
+            for (int k = 1; k < N / 2; ++k)
+            {
+                const double f = k * sr / N, e = (double) buf[(size_t) k] * buf[(size_t) k];
+                all += e;
+                const double h = f / f0;
+                if (std::abs (h - std::round (h)) * f0 > 25.0) off += e;   // a más de 25 Hz de cualquier armónico
+            }
+            return 10.0 * std::log10 ((off + 1e-20) / (all + 1e-20));
+        };
+        auto base = Forge::SynthPatch::init();
+        base.set (ParamID::osc1Wave, (float) Wave::Sine);
+        base.set (ParamID::ampA, 0.002f); base.set (ParamID::ampD, 1.0f); base.set (ParamID::ampS, 1.0f);
+        const double f0 = 440.0 * std::exp2 ((57 - 69) / 12.0);
+        const auto plain = r.render (base, 57, 1.0, 1.2, sr);
+        auto on = base;
+        on.set (ParamID::op3On, 1); on.set (ParamID::op3Target, 0); on.set (ParamID::op3Ratio, 2.76f); on.set (ParamID::op3Amount, 0.4f);
+        const auto bell = r.render (on, 57, 1.0, 1.2, sr);
+        check ("Op 3 a relacion 2.76 agrega parciales inarmonicos", inharmonicDb (bell, f0, 0.1, 0.9) > inharmonicDb (plain, f0, 0.1, 0.9) + 20.0 && safe (bell),
+               juce::String (inharmonicDb (plain, f0, 0.1, 0.9), 1) + " -> " + juce::String (inharmonicDb (bell, f0, 0.1, 0.9), 1) + " dB fuera de los armonicos");
+        auto harm = on; harm.set (ParamID::op3Ratio, 2.0f);
+        const auto h2 = r.render (harm, 57, 1.0, 1.2, sr);
+        check ("Op 3 a relacion 2 sigue afinado (casi sin inarmonia)", inharmonicDb (h2, f0, 0.1, 0.9) < inharmonicDb (bell, f0, 0.1, 0.9) - 15.0,
+               juce::String (inharmonicDb (h2, f0, 0.1, 0.9), 1) + " dB");
+        auto env = on; env.set (ParamID::op3Amount, 0.0f); env.set (ParamID::op3Env, 0.8f);
+        env.set (ParamID::env3A, 0.001f); env.set (ParamID::env3D, 0.25f); env.set (ParamID::env3S, 0.0f);
+        const auto e = r.render (env, 57, 1.0, 1.2, sr);
+        check ("Env 3 -> indice: la inarmonia cae con el tiempo (campana)", inharmonicDb (e, f0, 0.0, 0.35) > inharmonicDb (e, f0, 0.6, 0.95) + 10.0,
+               juce::String (inharmonicDb (e, f0, 0.0, 0.35), 1) + " -> " + juce::String (inharmonicDb (e, f0, 0.6, 0.95), 1) + " dB");
+        auto chain = on; chain.set (ParamID::op3Target, 1); chain.set (ParamID::fmAmount, 0.0f); chain.set (ParamID::osc2On, 0);
+        const auto silentChain = r.render (chain, 57, 1.0, 1.2, sr);
+        double diff = 0; for (int i = 0; i < plain.getNumSamples(); ++i) diff = juce::jmax (diff, (double) std::abs (plain.getSample (0, i) - silentChain.getSample (0, i)));
+        check ("Op 3 -> osc 2 sin que el osc 2 suene ni haga FM: no cambia nada (y la explicacion lo dice)", diff < 1.0e-6
+               && Forge::explainText (chain).contains ("no se oye"), juce::String (diff, 8));
+        auto chainOn = chain; chainOn.set (ParamID::fmAmount, 0.3f);
+        const auto c3 = r.render (chainOn, 57, 1.0, 1.2, sr);
+        auto noOp = chainOn; noOp.set (ParamID::op3On, 0);
+        const auto c2 = r.render (noOp, 57, 1.0, 1.2, sr);
+        check ("Cadena 3 -> 2 -> 1: con FM del osc 2, el operador 3 cambia el timbre", inharmonicDb (c3, f0, 0.1, 0.9) > inharmonicDb (c2, f0, 0.1, 0.9) + 10.0,
+               juce::String (inharmonicDb (c2, f0, 0.1, 0.9), 1) + " -> " + juce::String (inharmonicDb (c3, f0, 0.1, 0.9), 1) + " dB");
+        const auto g = Forge::PatchGraph::from (on);
+        bool edge = false; for (auto& ed : g.edges) edge = edge || (ed.from == "op3" && ed.to == "osc1" && ed.param == ParamID::op3Amount);
+        check ("El grafo muestra el operador 3 y su destino", edge && g.nodes[(size_t) Forge::Module::Op3].active);
     }
 
     // ================= En el plugin =================

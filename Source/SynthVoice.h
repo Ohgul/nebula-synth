@@ -91,6 +91,7 @@ public:
         for (auto& o : osc2) o = NebOsc();
         sub = NebOsc();
         lfo1 = NebLfo(); lfo2 = NebLfo();
+        op3Phase.fill (0.0);
         tick = 0; legatoPending = false;
         velocity = 1.0f; wheel = 0.0f; polyPressure = 0.0f; targetNote = currentNote = 60.0f;
         env2Val = env3Val = 0.0f;
@@ -156,6 +157,7 @@ public:
                     osc2[(size_t) u].reset (random, true);
                 }
                 sub.reset (random, false);
+                op3Phase.fill (0.0);   // sin azar: no cambia la secuencia aleatoria de los patches anteriores
             }
             lfo1.noteOn (random);
             lfo2.noteOn (random);
@@ -457,6 +459,8 @@ private:
         shape2   = juce::jlimit (0.0f, 1.0f, params[P::osc2Shape] + m[ModDst::Shape2]);
         mix      = juce::jlimit (0.0f, 1.0f, params[P::oscMix] + m[ModDst::Mix]);
         fm       = juce::jlimit (0.0f, 1.0f, params[P::fmAmount] + m[ModDst::Fm] + 0.45f * chaos * (0.6f + 0.4f * chaosVal));
+        op3Active = params[P::op3On] > 0.5f && (params[P::op3Amount] > 0.0005f || std::abs (params[P::op3Env]) > 0.0005f);
+        op3Amount = params[P::op3Amount]; op3EnvAmt = params[P::op3Env]; op3Target = params.i (P::op3Target);
         subLvl   = subOn ? juce::jlimit (0.0f, 1.0f, params[P::subLevel] * (1.0f + juce::jmin (0.0f, body)) + juce::jmax (0.0f, body) * 0.5f) : 0.0f;
         noiseLvl = noiseOn ? params[P::noise] : 0.0f;
         noiseMod = noiseOn ? juce::jlimit (0.0f, 1.0f, m[ModDst::Noise]) : 0.0f;
@@ -483,6 +487,7 @@ private:
             const float off = spread * detune;
             osc1[(size_t) u].setFrequency (noteHz (note1 + off), sr);
             osc2[(size_t) u].setFrequency (noteHz (note2 + off), sr);
+            op3Inc[(size_t) u] = juce::jlimit (0.0, 0.49, noteHz ((op3Target == 0 ? note1 : note2) + off) * (double) params[P::op3Ratio] / sr);
             const float pan = spread * width;
             panL[(size_t) u] = std::sqrt (0.5f * (1.0f - pan));
             panR[(size_t) u] = std::sqrt (0.5f * (1.0f + pan));
@@ -553,12 +558,22 @@ private:
             const Wavetable* tb1 = table1.get();
             const Wavetable* tb2 = table2.get();
             const double fmDepth = 1.5 * std::pow ((double) fm, 1.15);   // la FM se nota desde el principio de la perilla
+            // operador 3 (0.3.1): seno que modula la fase del osc 2 (cadena 3 -> 2 -> 1) o directo del osc 1
+            const float op3Index = op3Active ? juce::jlimit (0.0f, 1.0f, op3Amount + op3EnvAmt * env3Val) : 0.0f;
+            const double op3Depth = op3Index > 0.0f ? 1.5 * std::pow ((double) op3Index, 1.15) : 0.0;
             const float w1 = osc1On ? (osc2On ? 1.0f - mix : 1.0f) : 0.0f;
             const float w2 = osc2On ? (osc1On ? mix : 1.0f) : 0.0f;
             for (int u = 0; u < unison; ++u)
             {
-                const float o2 = osc2[(size_t) u].next (wave2, shape2, tb2);
-                const float o1 = osc1[(size_t) u].next (wave1, shape1, tb1, fmDepth * o2);
+                double pm3 = 0.0;
+                if (op3Depth > 0.0)
+                {
+                    auto& ph = op3Phase[(size_t) u];
+                    pm3 = op3Depth * std::sin (juce::MathConstants<double>::twoPi * ph);
+                    ph += op3Inc[(size_t) u]; ph -= std::floor (ph);
+                }
+                const float o2 = op3Target == 1 && pm3 != 0.0 ? osc2[(size_t) u].next (wave2, shape2, tb2, pm3) : osc2[(size_t) u].next (wave2, shape2, tb2);
+                const float o1 = osc1[(size_t) u].next (wave1, shape1, tb1, op3Target == 0 && pm3 != 0.0 ? fmDepth * o2 + pm3 : fmDepth * o2);
                 const float s = (o1 * w1 + o2 * w2) * uniNorm;
                 L += s * panL[(size_t) u] * 1.41421f;
                 R += s * panR[(size_t) u] * 1.41421f;
@@ -783,6 +798,8 @@ private:
     double sr = 44100.0;
 
     std::array<NebOsc, maxUnison> osc1, osc2;
+    std::array<double, maxUnison> op3Phase {}, op3Inc {};
+    bool op3Active = false; float op3Amount = 0.0f, op3EnvAmt = 0.0f; int op3Target = 1;
     NebOsc sub;
     std::array<NebFilter, 4> filters;   // F1 L/R, F2 L/R
     NebEnv ampEnv, env2, env3;

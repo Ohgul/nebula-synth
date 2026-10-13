@@ -88,7 +88,11 @@ private:
     IconChoice polyMode;
     NebKnob *voices, *glide, *bend, *vel, *volume;
 
-    juce::Rectangle<int> rOsc1, rOsc2, rSample, rMix, rUni, rFilter, rAmp, rVoice, rEngine;
+    juce::Rectangle<int> rOsc1, rOsc2, rSample, rMix, rUni, rOp3, rFilter, rAmp, rVoice, rEngine;
+    // FM operador 3 (0.3.1)
+    IconToggle op3Power;
+    ParamCombo op3Target;
+    NebKnob *op3Ratio = nullptr, *op3Amount = nullptr, *op3Env = nullptr;
     bool lastSampler = false, lastResynth = false;
     int layoutSig = -1;
 };

@@ -56,6 +56,8 @@ namespace Forge
         if (p.geti (ParamID::osc1On)) { ++cx; parts.add ("Osc1 " + waves[p.geti (ParamID::osc1Wave)] + (p.geti (ParamID::osc1Octave) != 0 ? juce::String (" ") + juce::String (p.geti (ParamID::osc1Octave)) + " oct" : juce::String())); }
         if (p.geti (ParamID::osc2On) && p.get (ParamID::oscMix) > 0.01f) { ++cx; parts.add ("Osc2 " + waves[p.geti (ParamID::osc2Wave)] + juce::String::formatted (" %+d st %+.0f ct", p.geti (ParamID::osc2Semi), p.get (ParamID::osc2Fine))); }
         if (p.get (ParamID::fmAmount) > 0.01f) { ++cx; parts.add (juce::String::formatted ("FM %.0f %%", p.get (ParamID::fmAmount) * 100)); }
+        if (p.geti (ParamID::op3On) && (p.get (ParamID::op3Amount) > 0.0005f || std::abs (p.get (ParamID::op3Env)) > 0.0005f))
+        { ++cx; parts.add (juce::String::formatted ("Op3 x%.2f %.0f %% > Osc%d", p.get (ParamID::op3Ratio), p.get (ParamID::op3Amount) * 100, p.geti (ParamID::op3Target) + 1)); }
         if (p.geti (ParamID::subOn) && p.get (ParamID::subLevel) > 0.01f) { ++cx; parts.add (juce::String::formatted ("Sub %.0f %%", p.get (ParamID::subLevel) * 100)); }
         if (p.geti (ParamID::noiseOn) && (p.get (ParamID::noise) > 0.01f || std::abs (p.getMod (ModSrc::Env2, ModDst::Noise)) > 0.01f)) { ++cx; parts.add ("Ruido"); }
         if (p.geti (ParamID::f1On) && p.get (ParamID::cutoff) < 19000.0f) { ++cx; parts.add (juce::String::formatted ("Filtro %.0f Hz", p.get (ParamID::cutoff))); }
@@ -85,6 +87,7 @@ namespace Forge
         if (p.geti (ParamID::osc1On)) k << "o1w" << p.geti (ParamID::osc1Wave) << "o" << p.geti (ParamID::osc1Octave);
         if (p.geti (ParamID::osc2On) && p.get (ParamID::oscMix) > 0.01f) k << "|o2w" << p.geti (ParamID::osc2Wave) << (p.geti (ParamID::osc2Semi) != 0 ? "s" : "");
         if (p.get (ParamID::fmAmount) > 0.01f) k << "|fm";
+        if (p.geti (ParamID::op3On) && (p.get (ParamID::op3Amount) > 0.0005f || std::abs (p.get (ParamID::op3Env)) > 0.0005f)) k << "|op3t" << p.geti (ParamID::op3Target);
         if (p.geti (ParamID::subOn) && p.get (ParamID::subLevel) > 0.01f) k << "|sub";
         if (p.geti (ParamID::noiseOn) && (p.get (ParamID::noise) > 0.01f || std::abs (p.getMod (ModSrc::Env2, ModDst::Noise)) > 0.01f)) k << "|nz";
         if (p.geti (ParamID::f1On) && p.get (ParamID::cutoff) < 19000.0f) k << "|flt";
@@ -441,6 +444,16 @@ namespace Forge
                p.set (ParamID::oscMix, 0.0f); p.set (ParamID::fmAmount, 0.5f);
                p.set (ParamID::cutoff, 18000.0f); p.set (ParamID::filterEnv, 0.0f); },
              { ParamID::fmAmount, ParamID::osc2Semi, ParamID::osc2Fine });
+        // 0.3.1: campana de tres operadores (op 3 -> osc 1 con relación inarmónica, índice que cae con la Env 3)
+        add ("L13", "Campana FM 3 operadores", Wave::Sine, [] (SynthPatch& p, const ReferenceFeatures& f)
+             { p.set (ParamID::osc2On, 1); p.set (ParamID::osc2Wave, (float) Wave::Sine);
+               p.set (ParamID::osc2Semi, 12); p.set (ParamID::osc2Fine, 0.0f);
+               p.set (ParamID::oscMix, 0.0f); p.set (ParamID::fmAmount, 0.2f);
+               p.set (ParamID::op3On, 1); p.set (ParamID::op3Target, 0); p.set (ParamID::op3Ratio, 2.76f);
+               p.set (ParamID::op3Amount, 0.15f); p.set (ParamID::op3Env, 0.4f);
+               p.set (ParamID::env3A, 0.001f); p.set (ParamID::env3D, (float) juce::jlimit (0.05, 2.0, f.decayS * 0.4)); p.set (ParamID::env3S, 0.0f);
+               p.set (ParamID::cutoff, 18000.0f); p.set (ParamID::filterEnv, 0.0f); },
+             { ParamID::fmAmount, ParamID::op3Ratio, ParamID::op3Amount, ParamID::op3Env, ParamID::env3D });
         return a;
     }
 
@@ -514,6 +527,15 @@ namespace Forge
 
         SearchDiagnostics diagnostics;
 
+        // Resultados progresivos (NEBULA-CORE-050): se llama desde el hilo de la búsqueda cada vez que una
+        // semilla empieza a optimizarse (provisional = true, fidelidad sin medir) y cuando termina (medida
+        // completa). El mismo id identifica al candidato en los dos avisos. Nada se inventa: cada aviso es
+        // un patch real del motor en ese momento de la búsqueda.
+        std::function<void (const PatchCandidate&, bool provisional)> onCandidate;
+        // Objetivo de la búsqueda (opcional): recibe el patch y su pérdida rápida contra la referencia y
+        // devuelve lo que se minimiza. Sin él, se minimiza la pérdida (recrear lo más fiel posible).
+        std::function<double (const SynthPatch&, double referenceLoss)> objective;
+
         std::vector<PatchCandidate> run (const SearchSettings& st)
         {
             const auto t0 = juce::Time::getMillisecondCounterHiRes();
@@ -577,6 +599,14 @@ namespace Forge
             for (int i = 0; i < toOptimize && ! cancel.load(); ++i)
             {
                 auto& sd = seeds[(size_t) i];
+                const auto id = sd.source == "indice" ? sd.id + "." + juce::String (dCount + 1) : sd.id + "-1";
+                if (onCandidate)
+                {
+                    auto pre = finish (sd.patch, sd.loss, id, 0, {});
+                    pre.source = sd.source; pre.initialPatch = sd.patch; pre.initialLoss = sd.loss;
+                    pre.fidelity.overall = -1.0f;
+                    onCandidate (pre, true);
+                }
                 juce::Random rng (st.seed * 7919 + i);
                 std::pair<SynthPatch, double> best { sd.patch, sd.loss };
                 if (st.optimizer == SearchSettings::Optimizer::CmaThenLocal)
@@ -588,10 +618,17 @@ namespace Forge
                 }
                 else
                     best = refine (sd.patch, sd.genes, rng, st.evaluationsPerArchitecture, t0, st.timeLimitS);
-                const auto id = sd.source == "indice" ? sd.id + "." + juce::String (++dCount) : sd.id + "-1";
+                if (sd.source == "indice") ++dCount;
                 auto c = finish (best.first, best.second, id, 0, {});
                 c.initialPatch = sd.patch; c.initialLoss = sd.loss; c.source = sd.source;
                 pool.push_back (c);
+                if (onCandidate && ! cancel.load())
+                {
+                    auto shown = c;
+                    measureFully (shown);
+                    shown.fidelity.loss = best.second;   // lo que minimizó la búsqueda
+                    onCandidate (shown, false);
+                }
                 diagnostics.seeds.push_back ({ id, sd.source, sd.loss, best.second });
                 diagnostics.bestFinalLoss = juce::jmin (diagnostics.bestFinalLoss, best.second);
                 progress = 0.9f * (float) (i + 1) / (float) toOptimize;
@@ -674,7 +711,8 @@ namespace Forge
         {
             ++evaluations;
             int cx = 0; describe (q, &cx);
-            return eval.fastLoss (eval.render (renderer, q, nullptr, true)) + (settings != nullptr ? settings->complexityPenalty : 0.01) * cx;
+            const double l = eval.fastLoss (eval.render (renderer, q, nullptr, true)) + (settings != nullptr ? settings->complexityPenalty : 0.01) * cx;
+            return objective ? objective (q, l) : l;
         }
 
         // CMA-ES separable sobre los genes (espacio normalizado, caja = rango de cada gen)

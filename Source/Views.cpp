@@ -79,6 +79,8 @@ EditView::EditView (NebulaAudioProcessor& p)
                   "Tempo: el sample dura los tiempos elegidos al BPM de tu proyecto; el tono no cambia la velocidad" },
                 { "Clasico", "Tempo" }),
       beats (p.state, ParamID::smpBeats, "Duracion", "Cuanto dura la seccion en modo Tempo (Auto = la mas cercana)"),
+      op3Power (p.state, ParamID::op3On, "", Icons::power(), "Encender / apagar el operador FM 3"),
+      op3Target (p.state, ParamID::op3Target, "Modula a", "Osc 2: cadena 3 > 2 > 1 (el osc 2 tiene que sonar o hacer FM). Osc 1: directo al portador"),
       grainType (p.state, ParamID::smpGrainType, grainIcon, grainTips),
       filterGraph (p),
       f1Type (p.state, ParamID::filterType, [] (int i) { return Icons::filterShape (i); }, filterTips),
@@ -156,6 +158,12 @@ EditView::EditView (NebulaAudioProcessor& p)
     uniV  = &knob (ParamID::uniVoices, "Voces", "Copias de cada nota (unisono): mas grueso");
     uniD  = &knob (ParamID::uniDetune, "Desafinar", "Cuanto se separan las copias");
     uniW  = &knob (ParamID::uniWidth, "Ancho", "Apertura estereo de las copias");
+    op3Ratio  = &knob (ParamID::op3Ratio, "Relacion", "Frecuencia del operador 3 respecto de su destino: enteros = armonico; no enteros = campana, metal");
+    op3Amount = &knob (ParamID::op3Amount, "Indice", "Cuanto modula: mas indice = mas armonicos");
+    op3Env    = &knob (ParamID::op3Env, "Env 3", "La envolvente 3 sube o baja el indice con el tiempo (brillo FM que cae)");
+    for (auto* k : { op3Ratio, op3Amount, op3Env }) k->setColour (abyss);
+    addAndMakeVisible (op3Power); addAndMakeVisible (op3Target);
+    op3Power.colour = accent2;
 
     cut1  = &knob (ParamID::cutoff, "Corte", "Frecuencia del filtro 1");
     res1  = &knob (ParamID::resonance, "Reso", "Resonancia del filtro 1");
@@ -259,7 +267,8 @@ void EditView::updateVisibility()
 {
     const bool s = samplerEngine();
     const bool rsx = resynthEngine();
-    for (auto* c : std::initializer_list<juce::Component*> { &wave1, &wave2, &preview1, &preview2, shape1, oct1, shape2, semi2, fine2, &osc1Power, &osc2Power })
+    for (auto* c : std::initializer_list<juce::Component*> { &wave1, &wave2, &preview1, &preview2, shape1, oct1, shape2, semi2, fine2, &osc1Power, &osc2Power,
+                                                             op3Ratio, op3Amount, op3Env, &op3Power, &op3Target })
         c->setVisible (! s && ! rsx);
     for (auto* c : std::initializer_list<juce::Component*> { rsSpeed, rsHarm, rsPartials, rsNoise, rsTone, rsStretch, rsWidth, &rsPitch, &rsRecreate, &rsDna })
         c->setVisible (rsx);
@@ -329,6 +338,7 @@ void EditView::paint (juce::Graphics& g)
     }
     drawSection (g, rMix, "MEZCLA", &iconMix);
     drawSection (g, rUni, "UNISONO", &iconUni);
+    drawSection (g, rOp3, "FM OP 3", &iconMix);
     drawSection (g, rFilter, "FILTROS", &iconFilter);
     drawSection (g, rAmp, "ENVOLVENTE DE VOLUMEN", &iconEnv);
     drawSection (g, rVoice, "VOCES Y SALIDA", &iconVoice);
@@ -439,9 +449,14 @@ void EditView::resized()
     }
 
     row1.removeFromLeft (gap);
-    rMix = row1.removeFromLeft (row1.getWidth() / 2 - gap / 2);
-    row1.removeFromLeft (gap);
-    rUni = row1;
+    {
+        const int total = row1.getWidth() - 2 * gap;
+        rMix = row1.removeFromLeft (total * 40 / 100);
+        row1.removeFromLeft (gap);
+        rUni = row1.removeFromLeft (total * 26 / 100);
+        row1.removeFromLeft (gap);
+        rOp3 = row1;
+    }
     uniPower.setBounds (rUni.getRight() - 38, rUni.getY() + 5, 28, 22);
     {
         auto a = rMix.reduced (8).withTrimmedTop (24);
@@ -458,6 +473,14 @@ void EditView::resized()
         auto top = a.removeFromTop (a.getHeight() / 2), bottom = a;
         uniV->setBounds (top.withSizeKeepingCentre (top.getWidth() / 2, top.getHeight()));
         uniD->setBounds (bottom.removeFromLeft (bottom.getWidth() / 2)); uniW->setBounds (bottom);
+    }
+    {
+        op3Power.setBounds (rOp3.getRight() - 38, rOp3.getY() + 5, 28, 22);
+        auto a = rOp3.reduced (8).withTrimmedTop (24);
+        auto top = a.removeFromTop (a.getHeight() / 2), bottom = a;
+        op3Target.setBounds (top.withSizeKeepingCentre (juce::jmin (130, top.getWidth()), juce::jmin (44, top.getHeight())));
+        const int w3 = bottom.getWidth() / 3;
+        op3Ratio->setBounds (bottom.removeFromLeft (w3)); op3Amount->setBounds (bottom.removeFromLeft (w3)); op3Env->setBounds (bottom);
     }
 
     // ---- Fila 2 ----

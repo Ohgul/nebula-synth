@@ -195,6 +195,12 @@ namespace ParamID
     inline constexpr const char* transform     = "transform";       // ABISMO (-1) ← ORIGINAL (0) → COSMOS (+1)
     inline constexpr const char* identity      = "identity";        // cuánto del original se conserva al transformar
     inline constexpr const char* transformOut  = "transformOut";    // nivel de salida de Cosmos/Abismo (dB)
+    // ---- 0.3.1: tercer operador FM (neutro por defecto: los proyectos anteriores suenan igual) ----
+    inline constexpr const char* op3On     = "op3On";
+    inline constexpr const char* op3Ratio  = "op3Ratio";      // relación de frecuencia con su destino
+    inline constexpr const char* op3Amount = "op3Amount";     // índice de modulación
+    inline constexpr const char* op3Env    = "op3Env";        // Envolvente 3 -> índice (bipolar)
+    inline constexpr const char* op3Target = "op3Target";     // a qué oscilador modula
 }
 
 // ---------------------------------------------------------------------------
@@ -518,6 +524,17 @@ inline std::vector<std::unique_ptr<juce::RangedAudioParameter>> createParameterL
     add (new F ({ ParamID::identity, 1 }, "Identidad", unit, 0.0f, pct));
     add (new F ({ ParamID::transformOut, 1 }, "Cosmos/Abismo Salida", NormalisableRange<float> (-24.0f, 6.0f), 0.0f, Attr().withStringFromValueFunction (ParamFormat::decibels)));
 
+    // ---- 0.3.1: operador FM 3 (seno) que modula la fase del osc 1 o del osc 2 (cadena 3 -> 2 -> 1) ----
+    {
+        NormalisableRange<float> ratio (0.25f, 16.0f);
+        ratio.setSkewForCentre (2.0f);
+        add (new B ({ ParamID::op3On, 2 }, "FM Op 3 Encendido", false));
+        add (new F ({ ParamID::op3Ratio, 2 }, "FM Op 3 Relacion", ratio, 2.0f, Attr().withStringFromValueFunction ([] (float v, int) { return juce::String (v, 3) + " x"; })));
+        add (new F ({ ParamID::op3Amount, 2 }, "FM Op 3 Indice", unit, 0.0f, pct));
+        add (new F ({ ParamID::op3Env, 2 }, "FM Op 3 Env 3", bip, 0.0f, Attr().withStringFromValueFunction (ParamFormat::bipolar)));
+        add (new C ({ ParamID::op3Target, 2 }, "FM Op 3 Destino", StringArray { "Osc 1", "Osc 2" }, 1));
+    }
+
     return p;
 }
 
@@ -554,6 +571,7 @@ namespace P
         fxRevOn, fxRevSize, fxRevDecay, fxRevDamp, fxRevPre, fxRevMix, fxWidth, quality, mpeOn, master,
         dnaPitchDepth, dnaFormant, dnaTilt, dnaTiltEvolve, dnaOddEven, dnaHarmonics, dnaNoiseTilt, dnaRough, dnaDensity,
         dnaAttack, dnaTransient, dnaRelease, dnaEvolve, dnaHold, transform, identity, transformOut,
+        op3On, op3Ratio, op3Amount, op3Env, op3Target,
         count
     };
 
@@ -584,7 +602,8 @@ namespace P
             ParamID::quality, ParamID::mpeOn, ParamID::master,
             ParamID::dnaPitchDepth, ParamID::dnaFormant, ParamID::dnaTilt, ParamID::dnaTiltEvolve, ParamID::dnaOddEven, ParamID::dnaHarmonics,
             ParamID::dnaNoiseTilt, ParamID::dnaRough, ParamID::dnaDensity, ParamID::dnaAttack, ParamID::dnaTransient, ParamID::dnaRelease,
-            ParamID::dnaEvolve, ParamID::dnaHold, ParamID::transform, ParamID::identity, ParamID::transformOut
+            ParamID::dnaEvolve, ParamID::dnaHold, ParamID::transform, ParamID::identity, ParamID::transformOut,
+            ParamID::op3On, ParamID::op3Ratio, ParamID::op3Amount, ParamID::op3Env, ParamID::op3Target
         };
         static_assert (sizeof (list) / sizeof (list[0]) == count, "lista de parámetros incompleta");
         return list;

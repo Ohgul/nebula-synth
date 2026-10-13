@@ -5,7 +5,7 @@ using namespace NebulaColours;
 
 //==============================================================================
 NebulaContent::NebulaContent (NebulaAudioProcessor& p)
-    : proc (p), garden (p), edit (p), mod (p), fxView (p), macros (p), browser (p), sampleEditor (p), drawPanel (p), recipePanel (p), cleanerPanel (p), dnaPanel (p), forgePanel (p), transformView (p),
+    : proc (p), garden (p), edit (p), mod (p), fxView (p), macros (p), browser (p), sampleEditor (p), drawPanel (p), recipePanel (p), cleanerPanel (p), dnaPanel (p), forgePanel (p), transformView (p), brainView (p),
       keyboard (p.keyboardState, juce::MidiKeyboardComponent::horizontalKeyboard)
 {
     const char* names[] { "Cerebro", "Editar", "Modulacion", "Efectos" };
@@ -22,17 +22,19 @@ NebulaContent::NebulaContent (NebulaAudioProcessor& p)
         addAndMakeVisible (*tabs[(size_t) i]);
     }
 
-    // Espacios de trabajo (0.4.0): DESCUBRIR (FORGE), CREAR (el sinte de siempre), TRANSFORMAR (Cosmos/Abismo)
-    const char* wsNames[] { "DESCUBRIR", "CREAR", "TRANSFORMAR" };
-    const juce::Path wsIcons[] { Icons::wand(), Icons::sliders(), Icons::sparkle() };
-    const char* wsTips[] { "Descubrir: FORGE busca recetas nativas para tu sample; mutar, cruzar y candados",
+    // Espacios de trabajo: 0 RECREAR (FORGE, máxima fidelidad), 1 CREAR (el sinte de siempre),
+    // 2 TRANSFORMAR (Cosmos/Abismo), 3 DESCUBRIR (cerebro vivo). En pantalla: DESCUBRIR, RECREAR, CREAR, TRANSFORMAR.
+    const char* wsNames[] { "RECREAR", "CREAR", "TRANSFORMAR", "DESCUBRIR" };
+    const juce::Path wsIcons[] { Icons::wand(), Icons::sliders(), Icons::sparkle(), Icons::seed() };
+    const char* wsTips[] { "Recrear: FORGE busca las recetas mas fieles a tu sample; mutar, cruzar y candados",
                            "Crear: Cerebro, edicion, modulacion y efectos",
-                           "Transformar: Cosmos/Abismo sobre la receta (reversible) y sobre el audio" };
-    for (int i = 0; i < 3; ++i)
+                           "Transformar: Cosmos/Abismo sobre la receta (reversible) y sobre el audio",
+                           "Descubrir: un cerebro de sonidos que crece desde tu referencia; tu eliges como evoluciona" };
+    for (int i = 0; i < 4; ++i)
     {
         workspaces[(size_t) i] = std::make_unique<IconButton> (wsNames[i], wsIcons[i], wsTips[i]);
         workspaces[(size_t) i]->horizontal = true;
-        workspaces[(size_t) i]->colour = i == 2 ? abyss.interpolatedWith (cosmos, 0.5f) : cosmos;
+        workspaces[(size_t) i]->colour = i == 2 ? abyss.interpolatedWith (cosmos, 0.5f) : i == 3 ? abyss : cosmos;
         workspaces[(size_t) i]->onClick = [this, i] { showWorkspace (i); };
         addAndMakeVisible (*workspaces[(size_t) i]);
     }
@@ -73,6 +75,8 @@ NebulaContent::NebulaContent (NebulaAudioProcessor& p)
     addChildComponent (dnaPanel);
     addChildComponent (forgePanel);
     addChildComponent (transformView);
+    addChildComponent (brainView);
+    brainView.onOpenEditor = [this] { showWorkspace (1); showTab (1); };
     forgePanel.onClose = [this] { showWorkspace (1); };
 
     garden.onOpenSampleEditor = [this] { sampleEditor.open(); };
@@ -113,11 +117,12 @@ void NebulaContent::setZoomChoice (float z)
 
 void NebulaContent::showWorkspace (int w)
 {
-    currentWorkspace = juce::jlimit (0, 2, w);
-    for (int i = 0; i < 3; ++i) workspaces[(size_t) i]->setToggleState (i == currentWorkspace, juce::dontSendNotification);
+    currentWorkspace = juce::jlimit (0, 3, w);
+    for (int i = 0; i < 4; ++i) workspaces[(size_t) i]->setToggleState (i == currentWorkspace, juce::dontSendNotification);
     for (auto& t : tabs) t->setVisible (currentWorkspace == 1);
     if (currentWorkspace == 0) forgePanel.open(); else forgePanel.setVisible (false);
     transformView.setVisible (currentWorkspace == 2);
+    brainView.setVisible (currentWorkspace == 3);
     showTab (currentTab);
     resized();
 }
@@ -253,7 +258,7 @@ void NebulaContent::paint (juce::Graphics& g)
     g.fillEllipse (18.0f - d * 0.5f, 27.0f - d * 0.5f, d, d);
     g.setColour (textDim);
     g.setFont (juce::FontOptions (10.0f));
-    g.drawText ("v" + juce::String (NEBULA_VERSION_STRING), 152, 15, 50, 14, juce::Justification::centredLeft);
+
     // línea fina bajo el encabezado
     g.setColour (panelEdge.withAlpha (0.7f));
     g.fillRect (14, 53, getWidth() - 28, 1);
@@ -264,7 +269,12 @@ void NebulaContent::paint (juce::Graphics& g)
     g.fillRect (footerArea.getX(), footerArea.getY(), footerArea.getWidth(), 1);
     g.setColour (textDim);
     g.setFont (juce::FontOptions (10.5f));
-    g.drawText (footerText, footerArea.reduced (14, 0), juce::Justification::centredLeft);
+    {
+        // versión siempre visible (discreta)
+        auto fa = footerArea.reduced (14, 0);
+        g.drawText (versionLabel(), fa.removeFromRight (150), juce::Justification::centredRight);
+        g.drawText (footerText, fa, juce::Justification::centredLeft);
+    }
 }
 
 void NebulaContent::resized()
@@ -273,9 +283,9 @@ void NebulaContent::resized()
     footerArea = all.removeFromBottom (20);
     auto r = all.reduced (14, 0);
     auto header = r.removeFromTop (54);
-    header.removeFromLeft (190);
-    auto wsArea = header.removeFromLeft (390).withSizeKeepingCentre (390, 32);
-    for (auto& w : workspaces) w->setBounds (wsArea.removeFromLeft (130).reduced (2, 0));
+    header.removeFromLeft (166);
+    auto wsArea = header.removeFromLeft (500).withSizeKeepingCentre (500, 32);
+    for (int i : { 3, 0, 1, 2 }) workspaces[(size_t) i]->setBounds (wsArea.removeFromLeft (i == 2 ? 140 : 120).reduced (2, 0));
 
     auto right = header.withSizeKeepingCentre (header.getWidth(), 30);
     zoomBox.setBounds (right.removeFromRight (74));
@@ -320,6 +330,7 @@ void NebulaContent::resized()
     dnaPanel.setBounds (r.reduced (16, 0).withTrimmedBottom (-60));
     forgePanel.setBounds (workArea);
     transformView.setBounds (workArea);
+    brainView.setBounds (workArea);
     browser.setBounds (r.reduced (200, 10));
 }
 
